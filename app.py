@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
+import html
 
 # -----------------------
 # Robust CSV loading
@@ -78,17 +79,21 @@ def parse_date(x):
 
 
 # -----------------------
-# Tooltip helper
+# Tooltip helper (CSS hover)
 # -----------------------
 def label_with_tooltip(label: str, tooltip: str):
     """
-    Renders a label with an ℹ️ icon that shows tooltip text on hover.
+    Renders a label with a hover tooltip using CSS.
     """
+    safe_tip = html.escape(tooltip)
+
     st.markdown(
         f"""
-        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+        <div class="tooltip-wrap">
           <span style="font-size:16px;font-weight:600;">{label}</span>
-          <span title="{tooltip}" style="cursor:help;font-size:14px;opacity:0.75;">ℹ️</span>
+          <span class="tooltip-icon">ℹ️
+            <span class="tooltip-text">{safe_tip}</span>
+          </span>
         </div>
         """,
         unsafe_allow_html=True
@@ -100,6 +105,68 @@ def label_with_tooltip(label: str, tooltip: str):
 # -----------------------
 st.set_page_config(page_title="SFDC Opportunity Contact Role Insights", layout="wide")
 st.title("Salesforce Opportunity Contact Role Insights")
+
+# CSS for tooltips (must be added once)
+st.markdown("""
+<style>
+/* Tooltip container */
+.tooltip-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+/* Info icon */
+.tooltip-icon {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+/* Tooltip text */
+.tooltip-icon .tooltip-text {
+  visibility: hidden;
+  width: 260px;
+  background-color: #111827;
+  color: white;
+  text-align: left;
+  border-radius: 6px;
+  padding: 8px 10px;
+  position: absolute;
+  z-index: 9999;
+  bottom: 135%;
+  left: 50%;
+  transform: translateX(-50%);
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  font-size: 12px;
+  line-height: 1.35;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  white-space: normal;
+}
+
+/* Tooltip arrow */
+.tooltip-icon .tooltip-text::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -6px;
+  border-width: 6px;
+  border-style: solid;
+  border-color: #111827 transparent transparent transparent;
+}
+
+/* Show on hover */
+.tooltip-icon:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.markdown(
     """
