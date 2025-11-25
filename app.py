@@ -29,10 +29,6 @@ def load_csv(file):
 # Column normalization
 # -----------------------
 def normalize_and_standardize_columns(df, is_roles=False):
-    """
-    Normalize column names (trim, lower) and map common Salesforce variants
-    into a standard schema used by the app.
-    """
     original_cols = list(df.columns)
     col_map = {}
 
@@ -68,7 +64,6 @@ def normalize_and_standardize_columns(df, is_roles=False):
             col_map[col] = "Contact Role"
         elif is_roles and ("primary" in norm or "is primary" in norm):
             col_map[col] = "Primary"
-
         else:
             col_map[col] = col
 
@@ -80,6 +75,24 @@ def parse_date(x):
         return pd.to_datetime(x)
     except Exception:
         return pd.NaT
+
+
+# -----------------------
+# Tooltip helper
+# -----------------------
+def label_with_tooltip(label: str, tooltip: str):
+    """
+    Renders a label with an ℹ️ icon that shows tooltip text on hover.
+    """
+    st.markdown(
+        f"""
+        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+          <span style="font-size:16px;font-weight:600;">{label}</span>
+          <span title="{tooltip}" style="cursor:help;font-size:14px;opacity:0.75;">ℹ️</span>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # -----------------------
@@ -111,11 +124,9 @@ if opps_file and roles_file:
         st.error(f"Error reading CSV files. Please confirm they are valid CSV exports. Details: {e}")
         st.stop()
 
-    # normalize headers
     opps = normalize_and_standardize_columns(raw_opps, is_roles=False)
     roles = normalize_and_standardize_columns(raw_roles, is_roles=True)
 
-    # Required columns for calculations
     required_opps = [
         "Opportunity ID", "Opportunity Name", "Account ID", "Amount",
         "Type", "Stage", "Created Date", "Close Date", "Opportunity Owner"
@@ -141,9 +152,7 @@ if opps_file and roles_file:
         )
         st.stop()
 
-    # -----------------------
-    # Cleaning & preparation
-    # -----------------------
+    # cleaning
     opps["Amount"] = pd.to_numeric(opps["Amount"], errors="coerce").fillna(0)
     if "Amount" in roles.columns:
         roles["Amount"] = pd.to_numeric(roles["Amount"], errors="coerce").fillna(0)
@@ -161,9 +170,7 @@ if opps_file and roles_file:
     opps = opps.merge(cr_counts.rename("contact_count"), on="Opportunity ID", how="left")
     opps["contact_count"] = opps["contact_count"].fillna(0)
 
-    # -----------------------
-    # Core KPIs
-    # -----------------------
+    # core KPIs
     total_opps = opps["Opportunity ID"].nunique()
     total_pipeline = opps["Amount"].sum()
 
@@ -186,16 +193,12 @@ if opps_file and roles_file:
     lost_count = lost_opps["Opportunity ID"].nunique()
     win_rate = won_count / (won_count + lost_count) if (won_count + lost_count) > 0 else 0
 
-    # -----------------------
-    # Contact role averages
-    # -----------------------
+    # contact role averages
     avg_cr_lost = lost_opps["contact_count"].mean() if not lost_opps.empty else 0
     avg_cr_won = won_opps["contact_count"].mean() if not won_opps.empty else 0
     avg_cr_open = open_opps["contact_count"].mean() if not open_opps.empty else 0
 
-    # -----------------------
-    # Time metrics
-    # -----------------------
+    # time metrics
     def days_diff(row):
         if pd.isna(row["Created Date"]) or pd.isna(row["Close Date"]):
             return None
@@ -228,9 +231,7 @@ if opps_file and roles_file:
     else:
         avg_age_open = None
 
-    # -----------------------
-    # Simple uplift model
-    # -----------------------
+    # uplift model
     industry_cr_open = 2.0
 
     if avg_cr_lost not in (0, None) and avg_cr_won not in (0, None):
@@ -245,82 +246,134 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
     # -----------------------
-    # Layout + descriptions
+    # Layout with hover tooltips
     # -----------------------
     col1, col2 = st.columns(2)
 
     with col1:
         st.subheader("Core Metrics")
 
-        st.metric("Total Opportunities", f"{total_opps:,}")
-        st.caption("Unique Opportunity IDs in the Opportunities export.")
+        label_with_tooltip(
+            "Total Opportunities",
+            "Unique Opportunity IDs in the Opportunities export."
+        )
+        st.metric("", f"{total_opps:,}")
 
-        st.metric("Total Pipeline", f"${total_pipeline:,.0f}")
-        st.caption("Sum of Amount for all opportunities.")
+        label_with_tooltip(
+            "Total Pipeline",
+            "Sum of Amount for all opportunities."
+        )
+        st.metric("", f"${total_pipeline:,.0f}")
 
-        st.metric("Current Win Rate", f"{win_rate:.1%}")
-        st.caption("Closed Won ÷ (Closed Won + Closed Lost), based on Stage containing Won/Lost.")
+        label_with_tooltip(
+            "Current Win Rate",
+            "Closed Won ÷ (Closed Won + Closed Lost), based on Stage containing Won/Lost."
+        )
+        st.metric("", f"{win_rate:.1%}")
 
         st.subheader("Contact Role Coverage")
 
-        st.write(f"Opportunities **with** Contact Roles: **{opps_with_cr:,}**")
-        st.caption("Unique opportunities that appear in the Contact Roles export.")
+        label_with_tooltip(
+            "Opportunities with Contact Roles",
+            "Unique opportunities that appear in the Contact Roles export."
+        )
+        st.write(f"**{opps_with_cr:,}**")
 
-        st.write(f"Opportunities **without** Contact Roles: **{opps_without_cr:,}**")
-        st.caption("Total Opportunities minus those with Contact Roles.")
+        label_with_tooltip(
+            "Opportunities without Contact Roles",
+            "Total Opportunities minus those with Contact Roles."
+        )
+        st.write(f"**{opps_without_cr:,}**")
 
-        st.write(f"Pipeline with Contact Roles: **${pipeline_with_cr:,.0f}**")
-        st.caption("Sum of Amount for opportunities that have ≥1 Contact Role.")
+        label_with_tooltip(
+            "Pipeline with Contact Roles",
+            "Sum of Amount for opportunities that have ≥1 Contact Role."
+        )
+        st.write(f"**${pipeline_with_cr:,.0f}**")
 
-        st.write(f"Pipeline without Contact Roles: **${pipeline_without_cr:,.0f}**")
-        st.caption("Sum of Amount for opportunities with 0 Contact Roles.")
+        label_with_tooltip(
+            "Pipeline without Contact Roles",
+            "Sum of Amount for opportunities with 0 Contact Roles."
+        )
+        st.write(f"**${pipeline_without_cr:,.0f}**")
 
-        st.write(f"Opps with **only 1** Contact Role: **{opps_one_cr:,}**")
-        st.caption("Unique opportunities where Contact Role count = 1.")
+        label_with_tooltip(
+            "Opps with only 1 Contact Role",
+            "Unique opportunities where Contact Role count = 1."
+        )
+        st.write(f"**{opps_one_cr:,}**")
 
-        st.write(f"Pipeline with only 1 Contact Role: **${pipeline_one_cr:,.0f}**")
-        st.caption("Sum of Amount for opportunities with exactly 1 Contact Role.")
+        label_with_tooltip(
+            "Pipeline with only 1 Contact Role",
+            "Sum of Amount for opportunities with exactly 1 Contact Role."
+        )
+        st.write(f"**${pipeline_one_cr:,.0f}**")
 
     with col2:
         st.subheader("Contact Roles by Outcome")
 
-        st.write(f"Avg Contact Roles – **Won**: **{avg_cr_won:.1f}**")
-        st.caption("Average Contact Role count per Opportunity where Stage contains Won.")
+        label_with_tooltip(
+            "Avg Contact Roles – Won",
+            "Average Contact Role count per Opportunity where Stage contains Won."
+        )
+        st.write(f"**{avg_cr_won:.1f}**")
 
-        st.write(f"Avg Contact Roles – **Lost**: **{avg_cr_lost:.1f}**")
-        st.caption("Average Contact Role count per Opportunity where Stage contains Lost.")
+        label_with_tooltip(
+            "Avg Contact Roles – Lost",
+            "Average Contact Role count per Opportunity where Stage contains Lost."
+        )
+        st.write(f"**{avg_cr_lost:.1f}**")
 
-        st.write(f"Avg Contact Roles – **Open**: **{avg_cr_open:.1f}**")
-        st.caption("Average Contact Role count per Opportunity where Stage does not contain Won or Lost.")
+        label_with_tooltip(
+            "Avg Contact Roles – Open",
+            "Average Contact Role count per Opportunity where Stage does not contain Won or Lost."
+        )
+        st.write(f"**{avg_cr_open:.1f}**")
 
         st.subheader("Time to Close")
 
         if avg_days_won is not None:
-            st.write(f"Avg days to close – **Won**: **{avg_days_won:.0f}**")
-            st.caption("Average (Close Date − Created Date) for Won opportunities.")
+            label_with_tooltip(
+                "Avg days to close – Won",
+                "Average (Close Date − Created Date) for Won opportunities."
+            )
+            st.write(f"**{avg_days_won:.0f} days**")
 
         if avg_days_lost is not None:
-            st.write(f"Avg days to close – **Lost**: **{avg_days_lost:.0f}**")
-            st.caption("Average (Close Date − Created Date) for Lost opportunities.")
+            label_with_tooltip(
+                "Avg days to close – Lost",
+                "Average (Close Date − Created Date) for Lost opportunities."
+            )
+            st.write(f"**{avg_days_lost:.0f} days**")
 
         if avg_age_open is not None:
-            st.write(f"Avg age of **Open** opps: **{avg_age_open:.0f}**")
-            st.caption("Average (Today − Created Date) for open opportunities.")
+            label_with_tooltip(
+                "Avg age of Open opps",
+                "Average (Today − Created Date) for open opportunities."
+            )
+            st.write(f"**{avg_age_open:.0f} days**")
 
         st.subheader("Modeled Uplift")
 
-        st.write(f"Contact Influence Ratio (Won vs Lost): **{contact_influence_ratio:.2f}×**")
-        st.caption("Avg Contact Roles on Won ÷ Avg Contact Roles on Lost. Indicates how strongly contacts correlate with winning.")
+        label_with_tooltip(
+            "Contact Influence Ratio (Won vs Lost)",
+            "Avg Contact Roles on Won ÷ Avg Contact Roles on Lost. Indicates how strongly contacts correlate with winning."
+        )
+        st.write(f"**{contact_influence_ratio:.2f}×**")
 
-        st.write(f"Enhanced Win Rate (modeled): **{enhanced_win_rate:.1%}**")
-        st.caption("Current Win Rate scaled by Contact Influence Ratio, capped at 95% for sanity.")
+        label_with_tooltip(
+            "Enhanced Win Rate (modeled)",
+            "Current Win Rate scaled by Contact Influence Ratio, capped at 95% for sanity."
+        )
+        st.write(f"**{enhanced_win_rate:.1%}**")
 
-        st.write(f"Incremental Won Pipeline (modeled): **${incremental_won_pipeline:,.0f}**")
-        st.caption("(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount.")
+        label_with_tooltip(
+            "Incremental Won Pipeline (modeled)",
+            "(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount."
+        )
+        st.write(f"**${incremental_won_pipeline:,.0f}**")
 
-    # -----------------------
     # Executive Summary
-    # -----------------------
     st.subheader("Executive Summary")
 
     bullets = []
