@@ -513,51 +513,40 @@ if opps_file and roles_file:
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
     # -----------------------
-    # (5) Simulator target (all open opps)
+    # Pipeline Risk & Upside
     # -----------------------
-    section_start("Simulator — Target Contact Coverage")
-    st.caption("Slide the target avg contacts for open opportunities to see modeled win-rate and revenue impact.")
-    target_contacts = st.slider("Target avg contacts on Open Opps", 0.0, 5.0, 2.0, 0.5)
-    section_end()
+    open_df = open_opps.copy()
+    open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
+
+    open_pipeline = open_opps["Amount"].sum() if not open_opps.empty else 0
+    open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
+    open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
+    open_opps_total = open_df["Opportunity ID"].nunique() if not open_df.empty else 0
+    risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
 
     # -----------------------
-    # (2) Base uplift model (global)
+    # (2) Base uplift model helpers
     # -----------------------
     contact_influence_ratio = (avg_cr_won / avg_cr_lost) if avg_cr_lost not in (0, None) else 1.0
 
-    def modeled_win_rate_for_open(avg_open_contacts, base_win_rate):
+    def modeled_win_rate_for_open(avg_open_contacts, base_win_rate, target_contacts):
         """
         Simple proportional model:
         improvement_factor = target / current open coverage (capped)
         applied on base win rate (then capped).
         """
         cur = max(avg_open_contacts, 1e-6)
-        improvement_factor = min(1.8, target_contacts / cur)  # prevent crazy jumps on tiny denominators
+        improvement_factor = min(1.8, target_contacts / cur)
         return min(max(base_win_rate * improvement_factor, base_win_rate), 0.95)
 
-    enhanced_win_rate = modeled_win_rate_for_open(avg_cr_open, win_rate)
-
-    open_pipeline = open_opps["Amount"].sum() if not open_opps.empty else 0
-    incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
-
     # -----------------------
-    # Pipeline Risk & Upside
+    # Pipeline Risk & Upside card (needs enhanced later but ok to show now)
     # -----------------------
-    open_df = open_opps.copy()
-    open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
-
-    open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
-    open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
-    open_opps_total = open_df["Opportunity ID"].nunique() if not open_df.empty else 0
-    risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
-
     section_start("Pipeline Risk & Upside")
     label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opportunities with 0–1 contact roles.")
     show_value(f"${open_pipeline_risk:,.0f}")
     label_with_tooltip("% of Open Opps Under-Covered", "Open opportunities with 0–1 contact roles ÷ total open opportunities.")
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
-    label_with_tooltip("Modeled Upside if Coverage Improves", "(Enhanced win rate − current win rate) × open pipeline.")
-    show_value(f"${incremental_won_pipeline:,.0f}")
     section_end()
 
     # -----------------------
@@ -625,12 +614,29 @@ if opps_file and roles_file:
     show_value(f"{avg_age_open:.0f} days" if avg_age_open else "0 days")
     section_end()
 
+    # =========================================================
+    # MOVED HERE: (5) Simulator target (all open opps)
+    # =========================================================
+    section_start("Simulator — Target Contact Coverage")
+    st.caption("Slide the target avg contacts for open opportunities to see modeled win-rate and revenue impact.")
+    target_contacts = st.slider("Target avg contacts on Open Opps", 0.0, 5.0, 2.0, 0.5)
+    section_end()
+
+    # Apply simulator target to uplift
+    enhanced_win_rate = modeled_win_rate_for_open(avg_cr_open, win_rate, target_contacts)
+    incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
+
+    # Update Pipeline Risk & Upside with upside now that target is known
+    section_start("Pipeline Upside from Simulator")
+    label_with_tooltip("Modeled Upside if Coverage Improves", "(Enhanced win rate − current win rate) × open pipeline.")
+    show_value(f"${incremental_won_pipeline:,.0f}")
+    section_end()
+
     # -----------------------
     # (2) Coverage-Adjusted Forecast (simple weights)
     # -----------------------
     section_start("Coverage-Adjusted Forecast")
 
-    # coverage weights
     def weight_for_contacts(n):
         if n <= 0: return 0.6
         if n == 1: return 0.8
@@ -638,14 +644,11 @@ if opps_file and roles_file:
 
     open_df["coverage_weight"] = open_df["contact_count"].apply(weight_for_contacts)
 
-    # current expected wins open (base)
     expected_open_wins_current = win_rate * open_pipeline
 
-    # coverage-adjusted expected wins open
     open_df["expected_win_rate_adj"] = win_rate * open_df["coverage_weight"]
     expected_open_wins_adj = (open_df["expected_win_rate_adj"] * open_df["Amount"]).sum()
 
-    # implied coverage-adjusted win rate
     coverage_adj_win_rate = expected_open_wins_adj / open_pipeline if open_pipeline > 0 else 0
     forecast_gap = max(0, expected_open_wins_current - expected_open_wins_adj)
 
@@ -695,13 +698,12 @@ if opps_file and roles_file:
             opps=("Opportunity ID", "nunique")
         ).reset_index()
 
-        # compute uplift if ONLY this band hits target
         for _, r in seg.iterrows():
             band = r["Size Band"]
             band_open_pipeline = r["open_pipeline"]
             band_avg_contacts = r["avg_contacts"]
 
-            band_enhanced_win_rate = modeled_win_rate_for_open(band_avg_contacts, win_rate)
+            band_enhanced_win_rate = modeled_win_rate_for_open(band_avg_contacts, win_rate, target_contacts)
             band_incremental = max(0, (band_enhanced_win_rate - win_rate) * band_open_pipeline)
 
             seg_rows.append({
@@ -982,7 +984,7 @@ if opps_file and roles_file:
     pdf_chart_pngs.append(fig_to_png_bytes(fig4))
 
     # -----------------------
-    # Download Full PDF (uses industry default target 2.0 in text)
+    # Download Full PDF
     # -----------------------
     section_start("Download Full PDF Report")
 
