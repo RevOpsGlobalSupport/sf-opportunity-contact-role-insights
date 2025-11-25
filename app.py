@@ -101,35 +101,36 @@ def label_with_tooltip(label: str, tooltip: str):
 # -----------------------
 st.set_page_config(page_title="SFDC Opportunity Contact Role Insights", layout="wide")
 
-# Logo + title header row (bigger logo, everything starts below)
+# --- Logo at top (bigger) ---
 logo_url = "https://www.revopsglobal.com/wp-content/uploads/2024/09/Footer_Logo.png"
 site_url = "https://www.revopsglobal.com/"
 
 st.markdown(
     f"""
-    <div style="
-        display:flex;
-        align-items:center;
-        gap:18px;
-        padding:8px 0 14px 0;
-        border-bottom:1px solid #e5e7eb;
-        margin-bottom:14px;
-    ">
-      <a href="{site_url}" target="_blank" style="display:flex;align-items:center;">
-        <img src="{logo_url}" style="height:72px;" />
+    <div style="margin-top:4px;">
+      <a href="{site_url}" target="_blank">
+        <img src="{logo_url}" style="height:90px;" />
       </a>
-      <div>
-        <div style="font-size:26px;font-weight:700;line-height:1.1;">
-          Salesforce Opportunity Contact Role Insights
-        </div>
-        <div style="font-size:14px;color:#6b7280;margin-top:4px;">
-          Measure Contact Role coverage and its impact on win rates
-        </div>
-      </div>
+    </div>
+    <div style="height:18px;"></div>
+    """,
+    unsafe_allow_html=True
+)
+
+# Title starts below logo
+st.markdown(
+    """
+    <div style="font-size:28px;font-weight:700;line-height:1.15;">
+      Salesforce Opportunity Contact Role Insights
+    </div>
+    <div style="font-size:15px;color:#6b7280;margin-top:6px;margin-bottom:10px;">
+      Measure Contact Role coverage and its impact on win rates
     </div>
     """,
     unsafe_allow_html=True
 )
+
+st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
 
 # CSS for tooltips (readable)
 st.markdown("""
@@ -140,7 +141,6 @@ st.markdown("""
   gap: 6px;
   margin-top: 4px;
 }
-
 .tooltip-icon {
   position: relative;
   display: inline-block;
@@ -148,7 +148,6 @@ st.markdown("""
   font-size: 14px;
   opacity: 0.9;
 }
-
 .tooltip-icon .tooltip-text {
   visibility: hidden;
   width: 280px;
@@ -168,7 +167,6 @@ st.markdown("""
   white-space: normal;
   opacity: 1;
 }
-
 .tooltip-icon .tooltip-text::after {
   content: "";
   position: absolute;
@@ -179,12 +177,12 @@ st.markdown("""
   border-style: solid;
   border-color: #111827 transparent transparent transparent;
 }
-
 .tooltip-icon:hover .tooltip-text {
   visibility: visible;
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 # -----------------------
 # Instructions section (expandable)
