@@ -87,7 +87,7 @@ def label_with_tooltip(label: str, tooltip: str):
     st.markdown(
         f"""
         <div class="tooltip-wrap">
-          <span style="font-size:16px;font-weight:600;">{label}</span>
+          <span class="kpi-label">{label}</span>
           <span class="tooltip-icon">ℹ️
             <span class="tooltip-text">{safe_tip}</span>
           </span>
@@ -95,6 +95,9 @@ def label_with_tooltip(label: str, tooltip: str):
         """,
         unsafe_allow_html=True
     )
+
+def show_value(value: str):
+    st.markdown(f"<div class='kpi-value'>{value}</div>", unsafe_allow_html=True)
 
 
 # -----------------------
@@ -133,9 +136,21 @@ st.markdown(
 
 st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
 
-# CSS for tooltips (readable)
+# CSS for tooltips + KPI sizing
 st.markdown("""
 <style>
+/* KPI text sizing */
+.kpi-label {
+  font-size:16px;
+  font-weight:600;
+}
+.kpi-value {
+  font-size:20px;
+  font-weight:700;
+  margin:4px 0 14px 0;
+}
+
+/* Tooltip styles */
 .tooltip-wrap {
   display: inline-flex;
   align-items: center;
@@ -256,20 +271,10 @@ The app normalizes common Salesforce header variations
 sample_opps_url = "https://drive.google.com/file/d/11bNN1lSs6HtPyXVV0k9yYboO6XXdI85H/view?usp=sharing"
 sample_roles_url = "https://drive.google.com/file/d/1-w_yFF0_naXGUEX00TKOMDT2bAW7ehPE/view?usp=sharing"
 
-st.markdown(
-    f"""
-**Upload Opportunities CSV**  
-[Download sample]({sample_opps_url})
-"""
-)
+st.markdown(f"**Upload Opportunities CSV**  \n[Download sample]({sample_opps_url})")
 opps_file = st.file_uploader("", type=["csv"], key="opps")
 
-st.markdown(
-    f"""
-**Upload Opportunities with Contact Roles CSV**  
-[Download sample]({sample_roles_url})
-"""
-)
+st.markdown(f"**Upload Opportunities with Contact Roles CSV**  \n[Download sample]({sample_roles_url})")
 roles_file = st.file_uploader("", type=["csv"], key="roles")
 
 if opps_file and roles_file:
@@ -293,25 +298,15 @@ if opps_file and roles_file:
     missing_roles = [c for c in required_roles if c not in roles.columns]
 
     if missing_opps:
-        st.error(
-            "The Opportunities file is missing required columns after normalization: "
-            + ", ".join(missing_opps)
-            + ". Please re-export using the Salesforce template."
-        )
+        st.error("Opportunities file missing columns: " + ", ".join(missing_opps))
         st.stop()
-
     if missing_roles:
-        st.error(
-            "The Opportunities with Contact Roles file is missing required columns after normalization: "
-            + ", ".join(missing_roles)
-            + ". Please re-export using the Salesforce template."
-        )
+        st.error("Contact Roles file missing columns: " + ", ".join(missing_roles))
         st.stop()
 
     # cleaning
     opps["Amount"] = pd.to_numeric(opps["Amount"], errors="coerce").fillna(0)
-    if "Amount" in roles.columns:
-        roles["Amount"] = pd.to_numeric(roles["Amount"], errors="coerce").fillna(0)
+    roles["Amount"] = pd.to_numeric(roles.get("Amount", 0), errors="coerce").fillna(0)
 
     opps["Created Date"] = opps["Created Date"].apply(parse_date)
     opps["Close Date"] = opps["Close Date"].apply(parse_date)
@@ -379,17 +374,12 @@ if opps_file and roles_file:
     today = pd.Timestamp.today().normalize()
     if not open_opps.empty:
         open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days
-        avg_age_open = (
-            open_opps["age_days"].dropna().mean()
-            if not open_opps["age_days"].dropna().empty
-            else None
-        )
+        avg_age_open = open_opps["age_days"].dropna().mean()
     else:
         avg_age_open = None
 
     # uplift model
     industry_cr_open = 2.0
-
     if avg_cr_lost not in (0, None) and avg_cr_won not in (0, None):
         contact_influence_ratio = avg_cr_won / avg_cr_lost
     else:
@@ -402,99 +392,92 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
     # -----------------------
-    # Layout with hover tooltips
+    # SINGLE COLUMN METRICS
     # -----------------------
-    col1, col2 = st.columns(2)
+    st.subheader("Core Metrics")
 
-    with col1:
-        st.subheader("Core Metrics")
+    label_with_tooltip("Total Opportunities",
+                       "Unique Opportunity IDs in the Opportunities export.")
+    show_value(f"{total_opps:,}")
 
-        label_with_tooltip("Total Opportunities",
-                           "Unique Opportunity IDs in the Opportunities export.")
-        st.metric("", f"{total_opps:,}")
+    label_with_tooltip("Total Pipeline",
+                       "Sum of Amount for all opportunities.")
+    show_value(f"${total_pipeline:,.0f}")
 
-        label_with_tooltip("Total Pipeline",
-                           "Sum of Amount for all opportunities.")
-        st.metric("", f"${total_pipeline:,.0f}")
+    label_with_tooltip("Current Win Rate",
+                       "Closed Won ÷ (Closed Won + Closed Lost), based on Stage containing Won/Lost.")
+    show_value(f"{win_rate:.1%}")
 
-        label_with_tooltip("Current Win Rate",
-                           "Closed Won ÷ (Closed Won + Closed Lost), based on Stage containing Won/Lost.")
-        st.metric("", f"{win_rate:.1%}")
+    st.subheader("Contact Role Coverage")
 
-        st.subheader("Contact Role Coverage")
+    label_with_tooltip("Opportunities with Contact Roles",
+                       "Unique opportunities that appear in the Contact Roles export.")
+    show_value(f"{opps_with_cr:,}")
 
-        label_with_tooltip("Opportunities with Contact Roles",
-                           "Unique opportunities that appear in the Contact Roles export.")
-        st.write(f"**{opps_with_cr:,}**")
+    label_with_tooltip("Opportunities without Contact Roles",
+                       "Total Opportunities minus those with Contact Roles.")
+    show_value(f"{opps_without_cr:,}")
 
-        label_with_tooltip("Opportunities without Contact Roles",
-                           "Total Opportunities minus those with Contact Roles.")
-        st.write(f"**{opps_without_cr:,}**")
+    label_with_tooltip("Pipeline with Contact Roles",
+                       "Sum of Amount for opportunities that have ≥1 Contact Role.")
+    show_value(f"${pipeline_with_cr:,.0f}")
 
-        label_with_tooltip("Pipeline with Contact Roles",
-                           "Sum of Amount for opportunities that have ≥1 Contact Role.")
-        st.write(f"**${pipeline_with_cr:,.0f}**")
+    label_with_tooltip("Pipeline without Contact Roles",
+                       "Sum of Amount for opportunities with 0 Contact Roles.")
+    show_value(f"${pipeline_without_cr:,.0f}")
 
-        label_with_tooltip("Pipeline without Contact Roles",
-                           "Sum of Amount for opportunities with 0 Contact Roles.")
-        st.write(f"**${pipeline_without_cr:,.0f}**")
+    label_with_tooltip("Opps with only 1 Contact Role",
+                       "Unique opportunities where Contact Role count = 1.")
+    show_value(f"{opps_one_cr:,}")
 
-        label_with_tooltip("Opps with only 1 Contact Role",
-                           "Unique opportunities where Contact Role count = 1.")
-        st.write(f"**{opps_one_cr:,}**")
+    label_with_tooltip("Pipeline with only 1 Contact Role",
+                       "Sum of Amount for opportunities with exactly 1 Contact Role.")
+    show_value(f"${pipeline_one_cr:,.0f}")
 
-        label_with_tooltip("Pipeline with only 1 Contact Role",
-                           "Sum of Amount for opportunities with exactly 1 Contact Role.")
-        st.write(f"**${pipeline_one_cr:,.0f}**")
+    st.subheader("Contact Roles by Outcome")
 
-    with col2:
-        st.subheader("Contact Roles by Outcome")
+    label_with_tooltip("Avg Contact Roles – Won",
+                       "Average Contact Role count per Opportunity where Stage contains Won.")
+    show_value(f"{avg_cr_won:.1f}")
 
-        label_with_tooltip("Avg Contact Roles – Won",
-                           "Average Contact Role count per Opportunity where Stage contains Won.")
-        st.write(f"**{avg_cr_won:.1f}**")
+    label_with_tooltip("Avg Contact Roles – Lost",
+                       "Average Contact Role count per Opportunity where Stage contains Lost.")
+    show_value(f"{avg_cr_lost:.1f}")
 
-        label_with_tooltip("Avg Contact Roles – Lost",
-                           "Average Contact Role count per Opportunity where Stage contains Lost.")
-        st.write(f"**{avg_cr_lost:.1f}**")
+    label_with_tooltip("Avg Contact Roles – Open",
+                       "Average Contact Role count per Opportunity where Stage does not contain Won or Lost.")
+    show_value(f"{avg_cr_open:.1f}")
 
-        label_with_tooltip("Avg Contact Roles – Open",
-                           "Average Contact Role count per Opportunity where Stage does not contain Won or Lost.")
-        st.write(f"**{avg_cr_open:.1f}**")
+    st.subheader("Time to Close")
 
-        st.subheader("Time to Close")
+    label_with_tooltip("Avg days to close – Won",
+                       "Average (Close Date − Created Date) for Won opportunities.")
+    show_value(f"{avg_days_won:.0f} days" if avg_days_won is not None else "0 days")
 
-        if avg_days_won is not None:
-            label_with_tooltip("Avg days to close – Won",
-                               "Average (Close Date − Created Date) for Won opportunities.")
-            st.write(f"**{avg_days_won:.0f} days**")
+    label_with_tooltip("Avg days to close – Lost",
+                       "Average (Close Date − Created Date) for Lost opportunities.")
+    show_value(f"{avg_days_lost:.0f} days" if avg_days_lost is not None else "0 days")
 
-        if avg_days_lost is not None:
-            label_with_tooltip("Avg days to close – Lost",
-                               "Average (Close Date − Created Date) for Lost opportunities.")
-            st.write(f"**{avg_days_lost:.0f} days**")
+    label_with_tooltip("Avg age of Open opps",
+                       "Average (Today − Created Date) for open opportunities.")
+    show_value(f"{avg_age_open:.0f} days" if avg_age_open is not None else "0 days")
 
-        if avg_age_open is not None:
-            label_with_tooltip("Avg age of Open opps",
-                               "Average (Today − Created Date) for open opportunities.")
-            st.write(f"**{avg_age_open:.0f} days**")
+    st.subheader("Modeled Uplift")
 
-        st.subheader("Modeled Uplift")
+    label_with_tooltip("Contact Influence Ratio (Won vs Lost)",
+                       "Avg Contact Roles on Won ÷ Avg Contact Roles on Lost.")
+    show_value(f"{contact_influence_ratio:.2f}×")
 
-        label_with_tooltip("Contact Influence Ratio (Won vs Lost)",
-                           "Avg Contact Roles on Won ÷ Avg Contact Roles on Lost. Indicates how strongly contacts correlate with winning.")
-        st.write(f"**{contact_influence_ratio:.2f}×**")
+    label_with_tooltip("Enhanced Win Rate (modeled)",
+                       "Current Win Rate scaled by Contact Influence Ratio, capped at 95%.")
+    show_value(f"{enhanced_win_rate:.1%}")
 
-        label_with_tooltip("Enhanced Win Rate (modeled)",
-                           "Current Win Rate scaled by Contact Influence Ratio, capped at 95% for sanity.")
-        st.write(f"**{enhanced_win_rate:.1%}**")
-
-        label_with_tooltip("Incremental Won Pipeline (modeled)",
-                           "(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount.")
-        st.write(f"**${incremental_won_pipeline:,.0f}**")
+    label_with_tooltip("Incremental Won Pipeline (modeled)",
+                       "(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount.")
+    show_value(f"${incremental_won_pipeline:,.0f}")
 
     # -----------------------
-    # Executive Summary (conditional open-coverage bullet)
+    # Executive Summary
     # -----------------------
     st.subheader("Executive Summary")
 
@@ -530,153 +513,180 @@ if opps_file and roles_file:
         st.markdown("- " + b)
 
     # -----------------------
-    # Visual Insights
+    # Insights (4 clean charts)
     # -----------------------
-    st.subheader("Visual Insights")
+    st.subheader("Insights")
 
     chart_df = opps.copy()
     chart_df["Stage Group"] = "Open"
     chart_df.loc[won_mask, "Stage Group"] = "Won"
     chart_df.loc[lost_mask, "Stage Group"] = "Lost"
 
-    # 1) Avg Contact Roles by Outcome
-    avg_contacts_df = (
-        chart_df.groupby("Stage Group")["contact_count"]
-        .mean()
-        .reset_index()
-        .rename(columns={"contact_count": "Avg Contact Roles"})
-    )
+    chart_df["contact_count"] = pd.to_numeric(chart_df["contact_count"], errors="coerce").fillna(0)
+    chart_df["Amount"] = pd.to_numeric(chart_df["Amount"], errors="coerce").fillna(0)
 
-    chart1 = (
-        alt.Chart(avg_contacts_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("Stage Group:N", sort=["Won", "Open", "Lost"], title="Opportunity Outcome"),
-            y=alt.Y("Avg Contact Roles:Q", title="Avg Contact Roles"),
-            tooltip=["Stage Group", alt.Tooltip("Avg Contact Roles:Q", format=".2f")]
+    def contact_bucket(n):
+        try:
+            n = float(n)
+        except Exception:
+            n = 0
+        if n <= 0:
+            return "0"
+        if n == 1:
+            return "1"
+        if n == 2:
+            return "2"
+        if n == 3:
+            return "3"
+        return "4+"
+
+    chart_df["Contact Bucket"] = chart_df["contact_count"].apply(contact_bucket)
+    bucket_order = ["0", "1", "2", "3", "4+"]
+
+    # 1) Win Rate vs Contact Roles (binned)
+    closed_df = chart_df[chart_df["Stage Group"].isin(["Won", "Lost"])].copy()
+    winrate_bucket = (
+        closed_df.groupby("Contact Bucket")
+        .agg(
+            won=("Stage Group", lambda s: (s == "Won").sum()),
+            lost=("Stage Group", lambda s: (s == "Lost").sum())
         )
-        .properties(height=280)
+        .reset_index()
     )
-    st.altair_chart(chart1, use_container_width=True)
-
-    # 2) Pipeline by Contact Coverage Buckets
-    bucket_df = chart_df.copy()
-    bucket_df["Coverage Bucket"] = pd.cut(
-        bucket_df["contact_count"],
-        bins=[-1, 0, 1, 1000],
-        labels=["0 Contact Roles", "1 Contact Role", "2+ Contact Roles"]
+    winrate_bucket["Win Rate"] = winrate_bucket.apply(
+        lambda r: r["won"] / (r["won"] + r["lost"]) if (r["won"] + r["lost"]) > 0 else 0,
+        axis=1
     )
 
-    pipeline_bucket = (
-        bucket_df.groupby(["Stage Group", "Coverage Bucket"])["Amount"]
+    st.caption("Win rate increases as more stakeholders are engaged.")
+    chart_winrate = (
+        alt.Chart(winrate_bucket)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
+            y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%"), title="Win Rate"),
+            tooltip=[
+                alt.Tooltip("Contact Bucket:N", title="Bucket"),
+                alt.Tooltip("Win Rate:Q", format=".1%", title="Win Rate"),
+                alt.Tooltip("won:Q", title="Won Opps"),
+                alt.Tooltip("lost:Q", title="Lost Opps")
+            ]
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart_winrate, use_container_width=True)
+
+    # 2) Open Pipeline at Risk
+    open_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
+    open_df["Open Coverage Bucket"] = open_df["contact_count"].apply(
+        lambda n: "0 Contact Roles" if n == 0 else ("1 Contact Role" if n == 1 else "2+ Contact Roles")
+    )
+
+    open_pipeline_bucket = (
+        open_df.groupby("Open Coverage Bucket")["Amount"]
         .sum()
+        .reindex(["0 Contact Roles", "1 Contact Role", "2+ Contact Roles"])
+        .fillna(0)
         .reset_index()
+        .rename(columns={"Amount": "Open Pipeline"})
     )
 
-    chart2 = (
-        alt.Chart(pipeline_bucket)
+    st.caption("How much open pipeline is under-covered today.")
+    chart_open_pipeline = (
+        alt.Chart(open_pipeline_bucket)
         .mark_bar()
         .encode(
-            x=alt.X("Coverage Bucket:N", title="Contact Role Coverage"),
-            y=alt.Y("Amount:Q", title="Pipeline ($)"),
-            color=alt.Color("Stage Group:N", title="Outcome"),
+            x=alt.X("Open Coverage Bucket:N", title="Open Opportunity Coverage"),
+            y=alt.Y("Open Pipeline:Q", title="Open Pipeline ($)"),
             tooltip=[
-                "Stage Group", "Coverage Bucket",
-                alt.Tooltip("Amount:Q", format=",.0f")
+                "Open Coverage Bucket",
+                alt.Tooltip("Open Pipeline:Q", format=",.0f")
             ]
         )
-        .properties(height=320)
+        .properties(height=260)
     )
-    st.altair_chart(chart2, use_container_width=True)
+    st.altair_chart(chart_open_pipeline, use_container_width=True)
 
-    # 3) Distribution of Contact Roles
-    chart3 = (
-        alt.Chart(chart_df)
-        .mark_bar(opacity=0.8)
-        .encode(
-            x=alt.X("contact_count:Q", bin=alt.Bin(maxbins=15), title="Contact Roles per Opportunity"),
-            y=alt.Y("count():Q", title="Number of Opportunities"),
-            color=alt.Color("Stage Group:N", title="Outcome"),
-            tooltip=[
-                alt.Tooltip("contact_count:Q", title="Contact Roles"),
-                alt.Tooltip("count():Q", title="Opp Count")
-            ]
+    # 3) Avg Days/Age vs Contact Roles
+    time_df = chart_df.copy()
+
+    def safe_days_to_close(row):
+        if pd.isna(row["Created Date"]) or pd.isna(row["Close Date"]):
+            return None
+        return (row["Close Date"] - row["Created Date"]).days
+
+    time_df["days_to_close"] = time_df.apply(safe_days_to_close, axis=1)
+    today = pd.Timestamp.today().normalize()
+    time_df["open_age_days"] = None
+    open_mask_local = (time_df["Stage Group"] == "Open") & time_df["Created Date"].notna()
+    time_df.loc[open_mask_local, "open_age_days"] = (today - time_df.loc[open_mask_local, "Created Date"]).dt.days
+
+    agg_rows = []
+    for sg in ["Won", "Lost"]:
+        tmp = time_df[time_df["Stage Group"] == sg].copy()
+        grp = (
+            tmp.groupby("Contact Bucket")["days_to_close"]
+            .mean()
+            .reindex(bucket_order)
+            .reset_index()
         )
-        .properties(height=320)
+        grp["Stage Group"] = sg
+        grp = grp.rename(columns={"days_to_close": "Avg Days"})
+        agg_rows.append(grp)
+
+    tmp_open = time_df[time_df["Stage Group"] == "Open"].copy()
+    grp_open = (
+        tmp_open.groupby("Contact Bucket")["open_age_days"]
+        .mean()
+        .reindex(bucket_order)
+        .reset_index()
     )
-    st.altair_chart(chart3, use_container_width=True)
+    grp_open["Stage Group"] = "Open"
+    grp_open = grp_open.rename(columns={"open_age_days": "Avg Days"})
+    agg_rows.append(grp_open)
 
-    # 4) Contact Roles vs Amount (Scatter)
-    scatter_df = chart_df.copy()
-    scatter_df["Amount"] = pd.to_numeric(scatter_df["Amount"], errors="coerce").fillna(0)
+    avg_days_bucket = pd.concat(agg_rows, ignore_index=True)
 
-    chart4 = (
-        alt.Chart(scatter_df)
-        .mark_circle(size=70, opacity=0.55)
+    st.caption("More contact roles correlate with faster closes and younger open pipeline.")
+    chart_days = (
+        alt.Chart(avg_days_bucket)
+        .mark_bar()
         .encode(
-            x=alt.X("contact_count:Q", title="Contact Roles"),
-            y=alt.Y("Amount:Q", title="Amount ($)"),
+            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
+            y=alt.Y("Avg Days:Q", title="Avg Days (Close for Won/Lost, Age for Open)"),
             color=alt.Color("Stage Group:N", title="Outcome"),
             tooltip=[
-                "Opportunity ID",
                 "Stage Group",
-                alt.Tooltip("contact_count:Q", title="Contact Roles"),
-                alt.Tooltip("Amount:Q", format=",.0f", title="Amount")
+                "Contact Bucket",
+                alt.Tooltip("Avg Days:Q", format=",.0f")
             ]
         )
-        .properties(height=360)
+        .properties(height=300)
     )
-    st.altair_chart(chart4, use_container_width=True)
+    st.altair_chart(chart_days, use_container_width=True)
 
-    # -----------------------
-    # Executive Impact Visuals
-    # -----------------------
-    st.subheader("Executive Impact")
-
-    # A) Current vs Enhanced Win Rate
-    winrate_df = pd.DataFrame({
+    # 4) Before vs After Win Rate
+    impact_df = pd.DataFrame({
         "Scenario": ["Current Win Rate", "Enhanced Win Rate"],
         "Win Rate": [win_rate, enhanced_win_rate]
     })
 
-    chart5 = (
-        alt.Chart(winrate_df)
+    st.caption("Modeled uplift if open opportunities matched won-deal contact patterns.")
+    chart_impact = (
+        alt.Chart(impact_df)
         .mark_bar()
         .encode(
             x=alt.X("Scenario:N", title=""),
             y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%"), title="Win Rate"),
             tooltip=["Scenario", alt.Tooltip("Win Rate:Q", format=".1%")]
         )
-        .properties(height=260)
+        .properties(height=240)
     )
-    st.altair_chart(chart5, use_container_width=True)
-
-    # B) Expected Won Pipeline from Open Deals (Current vs Enhanced)
-    current_expected_open_won = win_rate * open_pipeline
-    enhanced_expected_open_won = enhanced_win_rate * open_pipeline
-
-    wonpipe_df = pd.DataFrame({
-        "Scenario": ["Current Expected Won (Open Pipeline)", "Enhanced Expected Won (Open Pipeline)"],
-        "Expected Won Pipeline": [current_expected_open_won, enhanced_expected_open_won]
-    })
-
-    chart6 = (
-        alt.Chart(wonpipe_df)
-        .mark_bar()
-        .encode(
-            x=alt.X("Scenario:N", title=""),
-            y=alt.Y("Expected Won Pipeline:Q", title="Expected Won Pipeline ($)"),
-            tooltip=[
-                "Scenario",
-                alt.Tooltip("Expected Won Pipeline:Q", format=",.0f")
-            ]
-        )
-        .properties(height=280)
-    )
-    st.altair_chart(chart6, use_container_width=True)
+    st.altair_chart(chart_impact, use_container_width=True)
 
     st.markdown(
-        f"**Incremental modeled won pipeline:** ${incremental_won_pipeline:,.0f}"
+        f"**Modeled incremental won pipeline from improved coverage:** "
+        f"${incremental_won_pipeline:,.0f}"
     )
 
     # -----------------------
