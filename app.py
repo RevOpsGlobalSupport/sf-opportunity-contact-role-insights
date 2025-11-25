@@ -99,6 +99,19 @@ def label_with_tooltip(label: str, tooltip: str):
 def show_value(value: str):
     st.markdown(f"<div class='kpi-value'>{value}</div>", unsafe_allow_html=True)
 
+# -----------------------
+# Section "card" wrappers
+# -----------------------
+def section_start(title: str):
+    st.markdown(f"""
+    <div class="section-card">
+      <div class="section-title">{html.escape(title)}</div>
+      <div class="section-divider"></div>
+    """, unsafe_allow_html=True)
+
+def section_end():
+    st.markdown("</div>", unsafe_allow_html=True)
+
 
 # -----------------------
 # Streamlit App
@@ -136,9 +149,17 @@ st.markdown(
 
 st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
 
-# CSS for tooltips + KPI sizing
+# -----------------------
+# CSS (tooltips + KPI sizing + section cards)
+# -----------------------
 st.markdown("""
 <style>
+/* ====== BRAND-Y CARD COLORS (tweak these 2 values if needed) ====== */
+:root{
+  --card-bg: #F5F9FF;     /* mild light-blue background */
+  --card-border: #E2ECFA; /* soft blue border */
+}
+
 /* KPI text sizing */
 .kpi-label {
   font-size:16px;
@@ -148,6 +169,26 @@ st.markdown("""
   font-size:20px;
   font-weight:700;
   margin:4px 0 14px 0;
+}
+
+/* Section cards */
+.section-card{
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 14px 16px 6px 16px;
+  margin: 8px 0 14px 0;
+}
+.section-title{
+  font-size:20px;
+  font-weight:700;
+  margin-bottom:6px;
+}
+.section-divider{
+  height:1px;
+  background: var(--card-border);
+  margin: 6px 0 12px 0;
+  border-radius:2px;
 }
 
 /* Tooltip styles */
@@ -392,95 +433,63 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
     # -----------------------
-    # SINGLE COLUMN METRICS
+    # SINGLE COLUMN METRICS (CARD SECTIONS)
     # -----------------------
-    st.subheader("Core Metrics")
-
-    label_with_tooltip("Total Opportunities",
-                       "Unique Opportunity IDs in the Opportunities export.")
+    section_start("Core Metrics")
+    label_with_tooltip("Total Opportunities", "Unique Opportunity IDs in the Opportunities export.")
     show_value(f"{total_opps:,}")
-
-    label_with_tooltip("Total Pipeline",
-                       "Sum of Amount for all opportunities.")
+    label_with_tooltip("Total Pipeline", "Sum of Amount for all opportunities.")
     show_value(f"${total_pipeline:,.0f}")
-
-    label_with_tooltip("Current Win Rate",
-                       "Closed Won ÷ (Closed Won + Closed Lost), based on Stage containing Won/Lost.")
+    label_with_tooltip("Current Win Rate", "Closed Won ÷ (Closed Won + Closed Lost).")
     show_value(f"{win_rate:.1%}")
+    section_end()
 
-    st.subheader("Contact Role Coverage")
-
-    label_with_tooltip("Opportunities with Contact Roles",
-                       "Unique opportunities that appear in the Contact Roles export.")
+    section_start("Contact Role Coverage")
+    label_with_tooltip("Opportunities with Contact Roles", "Unique opportunities that appear in the Contact Roles export.")
     show_value(f"{opps_with_cr:,}")
-
-    label_with_tooltip("Opportunities without Contact Roles",
-                       "Total Opportunities minus those with Contact Roles.")
+    label_with_tooltip("Opportunities without Contact Roles", "Total Opportunities minus those with Contact Roles.")
     show_value(f"{opps_without_cr:,}")
-
-    label_with_tooltip("Pipeline with Contact Roles",
-                       "Sum of Amount for opportunities that have ≥1 Contact Role.")
+    label_with_tooltip("Pipeline with Contact Roles", "Sum of Amount for opportunities with ≥1 Contact Role.")
     show_value(f"${pipeline_with_cr:,.0f}")
-
-    label_with_tooltip("Pipeline without Contact Roles",
-                       "Sum of Amount for opportunities with 0 Contact Roles.")
+    label_with_tooltip("Pipeline without Contact Roles", "Sum of Amount for opportunities with 0 Contact Roles.")
     show_value(f"${pipeline_without_cr:,.0f}")
-
-    label_with_tooltip("Opps with only 1 Contact Role",
-                       "Unique opportunities where Contact Role count = 1.")
+    label_with_tooltip("Opps with only 1 Contact Role", "Unique opportunities where Contact Role count = 1.")
     show_value(f"{opps_one_cr:,}")
-
-    label_with_tooltip("Pipeline with only 1 Contact Role",
-                       "Sum of Amount for opportunities with exactly 1 Contact Role.")
+    label_with_tooltip("Pipeline with only 1 Contact Role", "Sum of Amount for opportunities with exactly 1 Contact Role.")
     show_value(f"${pipeline_one_cr:,.0f}")
+    section_end()
 
-    st.subheader("Contact Roles by Outcome")
-
-    label_with_tooltip("Avg Contact Roles – Won",
-                       "Average Contact Role count per Opportunity where Stage contains Won.")
+    section_start("Contact Roles by Outcome")
+    label_with_tooltip("Avg Contact Roles – Won", "Average Contact Role count per Opportunity where Stage contains Won.")
     show_value(f"{avg_cr_won:.1f}")
-
-    label_with_tooltip("Avg Contact Roles – Lost",
-                       "Average Contact Role count per Opportunity where Stage contains Lost.")
+    label_with_tooltip("Avg Contact Roles – Lost", "Average Contact Role count per Opportunity where Stage contains Lost.")
     show_value(f"{avg_cr_lost:.1f}")
-
-    label_with_tooltip("Avg Contact Roles – Open",
-                       "Average Contact Role count per Opportunity where Stage does not contain Won or Lost.")
+    label_with_tooltip("Avg Contact Roles – Open", "Average Contact Role count per Opportunity where Stage does not contain Won or Lost.")
     show_value(f"{avg_cr_open:.1f}")
+    section_end()
 
-    st.subheader("Time to Close")
-
-    label_with_tooltip("Avg days to close – Won",
-                       "Average (Close Date − Created Date) for Won opportunities.")
+    section_start("Time to Close")
+    label_with_tooltip("Avg days to close – Won", "Average (Close Date − Created Date) for Won opportunities.")
     show_value(f"{avg_days_won:.0f} days" if avg_days_won is not None else "0 days")
-
-    label_with_tooltip("Avg days to close – Lost",
-                       "Average (Close Date − Created Date) for Lost opportunities.")
+    label_with_tooltip("Avg days to close – Lost", "Average (Close Date − Created Date) for Lost opportunities.")
     show_value(f"{avg_days_lost:.0f} days" if avg_days_lost is not None else "0 days")
-
-    label_with_tooltip("Avg age of Open opps",
-                       "Average (Today − Created Date) for open opportunities.")
+    label_with_tooltip("Avg age of Open opps", "Average (Today − Created Date) for open opportunities.")
     show_value(f"{avg_age_open:.0f} days" if avg_age_open is not None else "0 days")
+    section_end()
 
-    st.subheader("Modeled Uplift")
-
-    label_with_tooltip("Contact Influence Ratio (Won vs Lost)",
-                       "Avg Contact Roles on Won ÷ Avg Contact Roles on Lost.")
+    section_start("Modeled Uplift")
+    label_with_tooltip("Contact Influence Ratio (Won vs Lost)", "Avg Contact Roles on Won ÷ Avg Contact Roles on Lost.")
     show_value(f"{contact_influence_ratio:.2f}×")
-
-    label_with_tooltip("Enhanced Win Rate (modeled)",
-                       "Current Win Rate scaled by Contact Influence Ratio, capped at 95%.")
+    label_with_tooltip("Enhanced Win Rate (modeled)", "Current Win Rate scaled by Contact Influence Ratio, capped at 95%.")
     show_value(f"{enhanced_win_rate:.1%}")
-
-    label_with_tooltip("Incremental Won Pipeline (modeled)",
-                       "(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount.")
+    label_with_tooltip("Incremental Won Pipeline (modeled)", "(Enhanced Win Rate − Current Win Rate) × Open Pipeline Amount.")
     show_value(f"${incremental_won_pipeline:,.0f}")
+    section_end()
 
     # -----------------------
     # Executive Summary
     # -----------------------
-    st.subheader("Executive Summary")
-
+    section_start("Executive Summary")
     bullets = []
 
     bullets.append(
@@ -511,11 +520,12 @@ if opps_file and roles_file:
 
     for b in bullets:
         st.markdown("- " + b)
+    section_end()
 
     # -----------------------
     # Insights (4 clean charts)
     # -----------------------
-    st.subheader("Insights")
+    section_start("Insights")
 
     chart_df = opps.copy()
     chart_df["Stage Group"] = "Open"
@@ -689,14 +699,14 @@ if opps_file and roles_file:
         f"${incremental_won_pipeline:,.0f}"
     )
 
+    section_end()
+
     # -----------------------
     # CTA Section after results
     # -----------------------
-    st.markdown("---")
+    section_start("Buying Group Automation")
     st.markdown(
         """
-### Want to drive higher win rates with Buying Groups?
-
 RevOps Global’s **Buying Group Automation** helps sales teams identify stakeholders, close coverage gaps,  
 and multi-thread deals faster — directly improving Contact Role coverage and conversion.
 
@@ -704,6 +714,7 @@ and multi-thread deals faster — directly improving Contact Role coverage and c
 https://www.revopsglobal.com/buying-group-automation/
         """
     )
+    section_end()
 
 else:
     st.info("Upload both CSV files above to generate insights.")
