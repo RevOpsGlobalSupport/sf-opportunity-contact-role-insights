@@ -21,6 +21,7 @@ from PIL import Image as PILImage
 import matplotlib.pyplot as plt
 from matplotlib.ticker import PercentFormatter
 
+
 # -----------------------
 # Robust CSV loading
 # -----------------------
@@ -165,7 +166,8 @@ def build_pdf_report(
     bullets,
     owner_rollup_rows,
     top_opps_rows,
-    chart_pngs
+    chart_pngs,
+    segment_rows
 ):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -241,8 +243,29 @@ def build_pdf_report(
     for i, png_buf in enumerate(chart_pngs, start=1):
         story.append(Image(png_buf, width=6.7*inch, height=3.2*inch))
         story.append(Spacer(1, 0.15*inch))
-        if i in (2, 4):  # avoid overlong pages
+        if i in (2, 4):
             story.append(PageBreak())
+
+    # Segment uplift
+    story.append(Paragraph("Segment Uplift (Deal Size Bands)", styles["H2"]))
+    story.append(Paragraph(
+        "Bands are derived automatically from your opportunity Amount distribution (33rd / 67th percentiles).",
+        styles["Body"]
+    ))
+    if segment_rows:
+        seg_table = [["Segment", "Open Pipeline", "Avg Contacts (Open)", "Incremental Won Pipeline (modeled)"]] + segment_rows
+        t2 = Table(seg_table, colWidths=[1.4*inch, 1.8*inch, 1.6*inch, 1.9*inch])
+        t2.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F1F5F9")),
+            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
+            ("ALIGN", (1,1), (-1,-1), "RIGHT"),
+            ("FONTSIZE", (0,0), (-1,-1), 9.8),
+        ]))
+        story.append(t2)
+    else:
+        story.append(Paragraph("Not enough open opportunities to segment.", styles["Body"]))
+    story.append(Spacer(1, 0.12*inch))
 
     # Owner rollup
     story.append(Paragraph("Owner Coverage Rollup (Coaching View)", styles["H2"]))
@@ -431,6 +454,7 @@ if opps_file and roles_file:
     if missing_roles:
         st.error("Contact Roles file missing columns: " + ", ".join(missing_roles)); st.stop()
 
+    # Clean
     opps["Amount"] = pd.to_numeric(opps["Amount"], errors="coerce").fillna(0)
     opps["Created Date"] = opps["Created Date"].apply(parse_date)
     opps["Close Date"] = opps["Close Date"].apply(parse_date)
@@ -440,10 +464,12 @@ if opps_file and roles_file:
     lost_mask = stage.str.contains("Lost", case=False, na=False)
     open_mask = ~won_mask & ~lost_mask
 
+    # Contact counts per opp
     cr_counts = roles.groupby("Opportunity ID")["Contact ID"].nunique()
     opps = opps.merge(cr_counts.rename("contact_count"), on="Opportunity ID", how="left")
-    opps["contact_count"] = opps["contact_count"].fillna(0)
+    opps["contact_count"] = pd.to_numeric(opps["contact_count"], errors="coerce").fillna(0)
 
+    # Core KPIs
     total_opps = opps["Opportunity ID"].nunique()
     total_pipeline = opps["Amount"].sum()
 
@@ -470,6 +496,7 @@ if opps_file and roles_file:
     avg_cr_won = won_opps["contact_count"].mean() if not won_opps.empty else 0
     avg_cr_open = open_opps["contact_count"].mean() if not open_opps.empty else 0
 
+    # Time metrics
     def days_diff(row):
         if pd.isna(row["Created Date"]) or pd.isna(row["Close Date"]):
             return None
@@ -485,13 +512,37 @@ if opps_file and roles_file:
     open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days if not open_opps.empty else None
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
-    industry_cr_open = 2.0
+    # -----------------------
+    # (5) Simulator target (all open opps)
+    # -----------------------
+    section_start("Simulator — Target Contact Coverage")
+    st.caption("Slide the target avg contacts for open opportunities to see modeled win-rate and revenue impact.")
+    target_contacts = st.slider("Target avg contacts on Open Opps", 0.0, 5.0, 2.0, 0.5)
+    section_end()
+
+    # -----------------------
+    # (2) Base uplift model (global)
+    # -----------------------
     contact_influence_ratio = (avg_cr_won / avg_cr_lost) if avg_cr_lost not in (0, None) else 1.0
-    enhanced_win_rate = min(max(win_rate * contact_influence_ratio, win_rate), 0.95)
+
+    def modeled_win_rate_for_open(avg_open_contacts, base_win_rate):
+        """
+        Simple proportional model:
+        improvement_factor = target / current open coverage (capped)
+        applied on base win rate (then capped).
+        """
+        cur = max(avg_open_contacts, 1e-6)
+        improvement_factor = min(1.8, target_contacts / cur)  # prevent crazy jumps on tiny denominators
+        return min(max(base_win_rate * improvement_factor, base_win_rate), 0.95)
+
+    enhanced_win_rate = modeled_win_rate_for_open(avg_cr_open, win_rate)
 
     open_pipeline = open_opps["Amount"].sum() if not open_opps.empty else 0
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
+    # -----------------------
+    # Pipeline Risk & Upside
+    # -----------------------
     open_df = open_opps.copy()
     open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
 
@@ -500,18 +551,18 @@ if opps_file and roles_file:
     open_opps_total = open_df["Opportunity ID"].nunique() if not open_df.empty else 0
     risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
 
-    # -----------------------
-    # App cards
-    # -----------------------
     section_start("Pipeline Risk & Upside")
     label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opportunities with 0–1 contact roles.")
     show_value(f"${open_pipeline_risk:,.0f}")
     label_with_tooltip("% of Open Opps Under-Covered", "Open opportunities with 0–1 contact roles ÷ total open opportunities.")
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
-    label_with_tooltip("Modeled Upside if Coverage Improves", "Incremental won pipeline from improving open contact coverage.")
+    label_with_tooltip("Modeled Upside if Coverage Improves", "(Enhanced win rate − current win rate) × open pipeline.")
     show_value(f"${incremental_won_pipeline:,.0f}")
     section_end()
 
+    # -----------------------
+    # Buying Group Coverage Score (kept)
+    # -----------------------
     pct_2plus_open = open_df[open_df["contact_count"] >= 2]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
     pct_zero_open  = open_df[open_df["contact_count"] == 0]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
     gap_open_vs_won = max(0, avg_cr_won - avg_cr_open) if avg_cr_won and avg_cr_open is not None else 0
@@ -529,6 +580,9 @@ if opps_file and roles_file:
     show_value(f"{score:.0f} / 100 — {score_label}")
     section_end()
 
+    # -----------------------
+    # Core Metrics
+    # -----------------------
     section_start("Core Metrics")
     label_with_tooltip("Total Opportunities", "Unique opportunities in the export.")
     show_value(f"{total_opps:,}")
@@ -571,13 +625,113 @@ if opps_file and roles_file:
     show_value(f"{avg_age_open:.0f} days" if avg_age_open else "0 days")
     section_end()
 
-    section_start("Modeled Uplift")
-    label_with_tooltip("Contact Influence Ratio (Won vs Lost)", "Avg contacts Won ÷ Avg contacts Lost.")
-    show_value(f"{contact_influence_ratio:.2f}×")
-    label_with_tooltip("Enhanced Win Rate (modeled)", "Current win rate × influence ratio (capped).")
-    show_value(f"{enhanced_win_rate:.1%}")
-    label_with_tooltip("Incremental Won Pipeline (modeled)", "(Enhanced − Current) × Open Pipeline.")
-    show_value(f"${incremental_won_pipeline:,.0f}")
+    # -----------------------
+    # (2) Coverage-Adjusted Forecast (simple weights)
+    # -----------------------
+    section_start("Coverage-Adjusted Forecast")
+
+    # coverage weights
+    def weight_for_contacts(n):
+        if n <= 0: return 0.6
+        if n == 1: return 0.8
+        return 1.0
+
+    open_df["coverage_weight"] = open_df["contact_count"].apply(weight_for_contacts)
+
+    # current expected wins open (base)
+    expected_open_wins_current = win_rate * open_pipeline
+
+    # coverage-adjusted expected wins open
+    open_df["expected_win_rate_adj"] = win_rate * open_df["coverage_weight"]
+    expected_open_wins_adj = (open_df["expected_win_rate_adj"] * open_df["Amount"]).sum()
+
+    # implied coverage-adjusted win rate
+    coverage_adj_win_rate = expected_open_wins_adj / open_pipeline if open_pipeline > 0 else 0
+    forecast_gap = max(0, expected_open_wins_current - expected_open_wins_adj)
+
+    label_with_tooltip(
+        "Coverage-Adjusted Win Rate (Open)",
+        "Weighted win rate for open opps using simple coverage factors: 0CR=0.6×, 1CR=0.8×, 2+CR=1.0×."
+    )
+    show_value(f"{coverage_adj_win_rate:.1%}")
+
+    label_with_tooltip(
+        "Coverage-Adjusted Expected Won Pipeline (Open)",
+        "Sum(Amount × (current win rate × coverage weight)) for open opps."
+    )
+    show_value(f"${expected_open_wins_adj:,.0f}")
+
+    label_with_tooltip(
+        "Coverage Risk Gap",
+        "Current expected won pipeline on open opps minus coverage-adjusted expected won pipeline."
+    )
+    show_value(f"${forecast_gap:,.0f}")
+
+    section_end()
+
+    # -----------------------
+    # (4) Segment uplift by dynamic deal size bands
+    # -----------------------
+    section_start("Segment Uplift (Deal Size Bands)")
+    st.caption("Bands are auto-derived from your Amount distribution (33rd / 67th percentiles).")
+
+    seg_rows = []
+    segment_rows_for_pdf = []
+
+    if not open_df.empty:
+        q33 = opps["Amount"].quantile(0.33)
+        q67 = opps["Amount"].quantile(0.67)
+
+        def size_band(a):
+            if a <= q33: return "SMB"
+            if a <= q67: return "Mid-Market"
+            return "Enterprise"
+
+        open_df["Size Band"] = open_df["Amount"].apply(size_band)
+
+        seg = open_df.groupby("Size Band").agg(
+            open_pipeline=("Amount", "sum"),
+            avg_contacts=("contact_count", "mean"),
+            opps=("Opportunity ID", "nunique")
+        ).reset_index()
+
+        # compute uplift if ONLY this band hits target
+        for _, r in seg.iterrows():
+            band = r["Size Band"]
+            band_open_pipeline = r["open_pipeline"]
+            band_avg_contacts = r["avg_contacts"]
+
+            band_enhanced_win_rate = modeled_win_rate_for_open(band_avg_contacts, win_rate)
+            band_incremental = max(0, (band_enhanced_win_rate - win_rate) * band_open_pipeline)
+
+            seg_rows.append({
+                "Segment": band,
+                "Open Pipeline": band_open_pipeline,
+                "Avg Contacts (Open)": band_avg_contacts,
+                "Incremental Won Pipeline": band_incremental
+            })
+
+            segment_rows_for_pdf.append([
+                band,
+                f"${band_open_pipeline:,.0f}",
+                f"{band_avg_contacts:.1f}",
+                f"${band_incremental:,.0f}"
+            ])
+
+        seg_df = pd.DataFrame(seg_rows).sort_values("Open Pipeline", ascending=False)
+
+        st.dataframe(
+            seg_df.style.format({
+                "Open Pipeline": "${:,.0f}",
+                "Avg Contacts (Open)": "{:.1f}",
+                "Incremental Won Pipeline": "${:,.0f}"
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.write("Not enough open opportunities to segment.")
+
     section_end()
 
     # -----------------------
@@ -591,10 +745,10 @@ if opps_file and roles_file:
         f"showing stronger multi-threading in wins."
     )
 
-    if (avg_cr_open < avg_cr_won) or (avg_cr_open < industry_cr_open):
+    if (avg_cr_open < avg_cr_won) or (avg_cr_open < 2.0):
         bullets.append(
             f"Open opportunities average **{avg_cr_open:.1f}** roles. Increasing coverage to at least "
-            f"**{industry_cr_open:.1f}** roles would align open deals with won patterns."
+            f"**{target_contacts:.1f}** roles would align open deals with won patterns."
         )
 
     if avg_days_won and avg_age_open:
@@ -604,8 +758,9 @@ if opps_file and roles_file:
         )
 
     bullets.append(
-        f"Improving open coverage could lift win rate from **{win_rate:.1%}** → **{enhanced_win_rate:.1%}**, "
-        f"creating **${incremental_won_pipeline:,.0f}** in incremental modeled won pipeline."
+        f"Improving open coverage to **{target_contacts:.1f}** roles could lift win rate from "
+        f"**{win_rate:.1%}** → **{enhanced_win_rate:.1%}**, creating **${incremental_won_pipeline:,.0f}** "
+        f"in incremental modeled won pipeline."
     )
 
     for b in bullets:
@@ -613,7 +768,7 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Insights (Altair in-app)
+    # Insights (Altair for app)
     # -----------------------
     section_start("Insights")
 
@@ -711,7 +866,7 @@ if opps_file and roles_file:
         "Scenario": ["Current Win Rate", "Enhanced Win Rate"],
         "Win Rate": [win_rate, enhanced_win_rate]
     })
-    st.caption("Modeled uplift if open opportunities matched won-deal contact patterns.")
+    st.caption("Modeled uplift if open opportunities match target coverage.")
     st.altair_chart(
         alt.Chart(impact_df).mark_bar().encode(
             x=alt.X("Scenario:N", title=""),
@@ -789,7 +944,6 @@ if opps_file and roles_file:
     # -----------------------
     pdf_chart_pngs = []
 
-    # Chart 1: Win rate vs contacts
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
     ax1.plot(winrate_bucket["Contact Bucket"], winrate_bucket["Win Rate"], marker="o")
@@ -799,7 +953,6 @@ if opps_file and roles_file:
     ax1.yaxis.set_major_formatter(PercentFormatter(1.0))
     pdf_chart_pngs.append(fig_to_png_bytes(fig1))
 
-    # Chart 2: Open pipeline at risk
     fig2 = plt.figure(figsize=(7.2, 3.2))
     ax2 = fig2.add_subplot(111)
     ax2.bar(open_pipeline_bucket["Open Coverage Bucket"], open_pipeline_bucket["Open Pipeline"])
@@ -809,7 +962,6 @@ if opps_file and roles_file:
     ax2.tick_params(axis='x', rotation=10)
     pdf_chart_pngs.append(fig_to_png_bytes(fig2))
 
-    # Chart 3: Avg days/age vs contacts by stage group
     fig3 = plt.figure(figsize=(7.2, 3.6))
     ax3 = fig3.add_subplot(111)
     for sg in ["Won", "Lost", "Open"]:
@@ -821,7 +973,6 @@ if opps_file and roles_file:
     ax3.legend()
     pdf_chart_pngs.append(fig_to_png_bytes(fig3))
 
-    # Chart 4: Current vs enhanced win rate
     fig4 = plt.figure(figsize=(6.5, 3.0))
     ax4 = fig4.add_subplot(111)
     ax4.bar(impact_df["Scenario"], impact_df["Win Rate"])
@@ -831,7 +982,7 @@ if opps_file and roles_file:
     pdf_chart_pngs.append(fig_to_png_bytes(fig4))
 
     # -----------------------
-    # Download Full PDF with embedded charts
+    # Download Full PDF (uses industry default target 2.0 in text)
     # -----------------------
     section_start("Download Full PDF Report")
 
@@ -864,8 +1015,13 @@ if opps_file and roles_file:
             ["Avg days to close – Lost", f"{avg_days_lost:.0f} days" if avg_days_lost else "0 days"],
             ["Avg age of Open opps", f"{avg_age_open:.0f} days" if avg_age_open else "0 days"],
         ],
-        "Modeled Uplift": [
-            ["Contact Influence Ratio", f"{contact_influence_ratio:.2f}×"],
+        "Coverage-Adjusted Forecast": [
+            ["Coverage-Adjusted Win Rate (Open)", f"{coverage_adj_win_rate:.1%}"],
+            ["Coverage-Adjusted Expected Won Pipeline (Open)", f"${expected_open_wins_adj:,.0f}"],
+            ["Coverage Risk Gap", f"${forecast_gap:,.0f}"],
+        ],
+        "Modeled Uplift (Simulator Target)": [
+            ["Target Avg Contacts (Open)", f"{target_contacts:.1f}"],
             ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%}"],
             ["Incremental Won Pipeline (modeled)", f"${incremental_won_pipeline:,.0f}"],
         ],
@@ -876,7 +1032,8 @@ if opps_file and roles_file:
         bullets=bullets,
         owner_rollup_rows=owner_rollup_rows,
         top_opps_rows=top_opps_rows,
-        chart_pngs=pdf_chart_pngs
+        chart_pngs=pdf_chart_pngs,
+        segment_rows=segment_rows_for_pdf
     )
 
     st.download_button(
