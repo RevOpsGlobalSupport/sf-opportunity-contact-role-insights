@@ -156,8 +156,8 @@ st.markdown("""
 <style>
 /* ====== BRAND-Y CARD COLORS (tweak these 2 values if needed) ====== */
 :root{
-  --card-bg: #F5F9FF;     /* mild light-blue background */
-  --card-border: #E2ECFA; /* soft blue border */
+  --card-bg: #F5F9FF;      /* mild light-blue background */
+  --card-border: #E2ECFA;  /* soft blue border */
 }
 
 /* KPI text sizing */
@@ -433,6 +433,52 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
     # -----------------------
+    # Pipeline Risk & Upside (Wave 1)
+    # -----------------------
+    open_df = open_opps.copy()
+    open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
+
+    open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
+    open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
+    open_opps_total = open_df["Opportunity ID"].nunique() if not open_df.empty else 0
+    risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
+
+    section_start("Pipeline Risk & Upside")
+    label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opportunities with 0–1 contact roles.")
+    show_value(f"${open_pipeline_risk:,.0f}")
+    label_with_tooltip("% of Open Opps Under-Covered", "Open opportunities with 0–1 contact roles ÷ total open opportunities.")
+    show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
+    label_with_tooltip("Modeled Upside if Coverage Improves", "Incremental won pipeline from improving open contact coverage to won-deal patterns.")
+    show_value(f"${incremental_won_pipeline:,.0f}")
+    section_end()
+
+    # -----------------------
+    # Buying Group Coverage Score (Wave 1)
+    # -----------------------
+    pct_2plus_open = open_df[open_df["contact_count"] >= 2]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
+    pct_zero_open  = open_df[open_df["contact_count"] == 0]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
+    gap_open_vs_won = max(0, avg_cr_won - avg_cr_open) if avg_cr_won and avg_cr_open is not None else 0
+
+    score = (
+        (pct_2plus_open * 60) +
+        ((1 - pct_zero_open) * 30) +
+        (max(0, 1 - (gap_open_vs_won / max(avg_cr_won, 1))) * 10)
+    )
+    score = round(min(max(score, 0), 100), 0)
+
+    if score < 40:
+        score_label = "High risk"
+    elif score < 70:
+        score_label = "Needs improvement"
+    else:
+        score_label = "Healthy"
+
+    section_start("Buying Group Coverage Score")
+    label_with_tooltip("Coverage Health Score", "Composite score based on % open opps with 2+ contacts, % with zero contacts, and the gap vs won opp coverage.")
+    show_value(f"{score:.0f} / 100 — {score_label}")
+    section_end()
+
+    # -----------------------
     # SINGLE COLUMN METRICS (CARD SECTIONS)
     # -----------------------
     section_start("Core Metrics")
@@ -534,6 +580,8 @@ if opps_file and roles_file:
 
     chart_df["contact_count"] = pd.to_numeric(chart_df["contact_count"], errors="coerce").fillna(0)
     chart_df["Amount"] = pd.to_numeric(chart_df["Amount"], errors="coerce").fillna(0)
+    chart_df["Created Date"] = pd.to_datetime(chart_df["Created Date"], errors="coerce")
+    chart_df["Close Date"] = pd.to_datetime(chart_df["Close Date"], errors="coerce")
 
     def contact_bucket(n):
         try:
@@ -587,13 +635,13 @@ if opps_file and roles_file:
     st.altair_chart(chart_winrate, use_container_width=True)
 
     # 2) Open Pipeline at Risk
-    open_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
-    open_df["Open Coverage Bucket"] = open_df["contact_count"].apply(
+    open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
+    open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
         lambda n: "0 Contact Roles" if n == 0 else ("1 Contact Role" if n == 1 else "2+ Contact Roles")
     )
 
     open_pipeline_bucket = (
-        open_df.groupby("Open Coverage Bucket")["Amount"]
+        open_chart_df.groupby("Open Coverage Bucket")["Amount"]
         .sum()
         .reindex(["0 Contact Roles", "1 Contact Role", "2+ Contact Roles"])
         .fillna(0)
@@ -699,6 +747,38 @@ if opps_file and roles_file:
         f"${incremental_won_pipeline:,.0f}"
     )
 
+    section_end()
+
+    # -----------------------
+    # Top Open Opportunities to Fix First (Wave 1)
+    # -----------------------
+    section_start("Top Open Opportunities to Fix First")
+    if not open_df.empty:
+        tmp = open_df.copy()
+        tmp["age_days"] = (today - tmp["Created Date"]).dt.days
+        tmp["age_days"] = pd.to_numeric(tmp["age_days"], errors="coerce").fillna(0)
+
+        tmp["priority_score"] = (
+            (tmp["Amount"] / (tmp["Amount"].max() if tmp["Amount"].max() > 0 else 1)) * 0.6 +
+            (tmp["age_days"] / (tmp["age_days"].max() if tmp["age_days"].max() > 0 else 1)) * 0.3 +
+            ((1 - (tmp["contact_count"] / (tmp["contact_count"].max() if tmp["contact_count"].max() > 0 else 1))) * 0.1)
+        )
+
+        top_fix = tmp.sort_values("priority_score", ascending=False).head(10)
+
+        for _, r in top_fix.iterrows():
+            opp_name = r.get("Opportunity Name", "")
+            owner = r.get("Opportunity Owner", "")
+            amt = r.get("Amount", 0)
+            ccount = r.get("contact_count", 0)
+            age = r.get("age_days", 0)
+
+            st.markdown(
+                f"- **{opp_name}** (Owner: {owner}) — "
+                f"${amt:,.0f}, **{ccount:.0f} contacts**, {age:.0f} days open"
+            )
+    else:
+        st.write("No open opportunities found.")
     section_end()
 
     # -----------------------
