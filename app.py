@@ -3,7 +3,6 @@ import pandas as pd
 from datetime import datetime
 import html
 import altair as alt
-import io
 
 # -----------------------
 # Robust CSV loading
@@ -328,7 +327,7 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, (enhanced_win_rate - win_rate) * open_pipeline)
 
     # -----------------------
-    # Wave 1: Pipeline Risk & Upside
+    # Pipeline Risk & Upside
     # -----------------------
     open_df = open_opps.copy()
     open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
@@ -348,7 +347,7 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Wave 1: Buying Group Coverage Score
+    # Buying Group Coverage Score
     # -----------------------
     pct_2plus_open = open_df[open_df["contact_count"] >= 2]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
     pct_zero_open  = open_df[open_df["contact_count"] == 0]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
@@ -369,7 +368,7 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Base Metrics
+    # Core Metrics
     # -----------------------
     section_start("Core Metrics")
     label_with_tooltip("Total Opportunities", "Unique opportunities in the export.")
@@ -414,10 +413,8 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Wave 2: Explicit days-saved sensitivity
+    # Contact Coverage → Velocity Impact
     # -----------------------
-    # Interpretation: difference between Lost close days and Won close days
-    # distributed across the contact gap between Won and Open, using industry target as minimum
     section_start("Contact Coverage → Velocity Impact")
 
     contact_gap_to_target = max(0, industry_cr_open - avg_cr_open)
@@ -427,12 +424,8 @@ if opps_file and roles_file:
 
     if avg_days_lost and avg_days_won:
         close_gap_days = max(0, avg_days_lost - avg_days_won)
-
-        # use won-vs-lost contact gap for sensitivity, fallback to 1
         contact_gap_won_lost = max(1e-6, (avg_cr_won - avg_cr_lost)) if avg_cr_won and avg_cr_lost else 1
         days_saved_per_extra_contact = close_gap_days / contact_gap_won_lost
-
-        # estimate benefit for open opps reaching industry target
         est_days_saved_open = days_saved_per_extra_contact * contact_gap_to_target
 
     label_with_tooltip(
@@ -462,7 +455,7 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Executive Summary
+    # Executive Summary (shown once)
     # -----------------------
     section_start("Executive Summary")
     bullets = []
@@ -492,9 +485,15 @@ if opps_file and roles_file:
     for b in bullets:
         st.markdown("- " + b)
 
-    # Wave 3 lite: Copy summary
+    # Optional: download/copy summary text without showing bullets twice
     copy_text = "\n".join([f"- {b}" for b in bullets])
-    st.code(copy_text, language="markdown")
+    st.download_button(
+        "Download Executive Summary (text)",
+        data=copy_text.encode("utf-8"),
+        file_name="executive_summary.txt",
+        mime="text/plain"
+    )
+
     section_end()
 
     # -----------------------
@@ -595,7 +594,7 @@ if opps_file and roles_file:
         use_container_width=True
     )
 
-    # 4) Before vs after win rate (benchmark overlay)
+    # 4) Before vs after win rate
     impact_df = pd.DataFrame({
         "Scenario": ["Current Win Rate", "Enhanced Win Rate"],
         "Win Rate": [win_rate, enhanced_win_rate]
@@ -613,10 +612,12 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Wave 2: Owner Rollups
+    # Owner Rollups (Coaching View) + guidance line
     # -----------------------
     if "Opportunity Owner" in opps.columns:
         section_start("Owner Coverage Rollup (Coaching View)")
+        st.caption("Use this to coach reps: focus first on owners with the highest under-covered open pipeline.")
+
         owner_df = open_opps.copy()
         owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("Unassigned")
 
@@ -638,9 +639,11 @@ if opps_file and roles_file:
         section_end()
 
     # -----------------------
-    # Wave 1: Top Open Opps to Fix
+    # Top Open Opps to Fix + guidance line
     # -----------------------
     section_start("Top Open Opportunities to Fix First")
+    st.caption("Start multi-threading these deals first — they combine high value, age, and low contact coverage.")
+
     if not open_df.empty:
         tmp = open_df.copy()
         tmp["age_days"] = (today - tmp["Created Date"]).dt.days
@@ -664,9 +667,10 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # Wave 3 lite: Download branded HTML report
+    # Download branded HTML report
     # -----------------------
     section_start("Download Summary Report")
+
     report_html = f"""
     <html>
       <head><meta charset="utf-8"></head>
@@ -678,10 +682,12 @@ if opps_file and roles_file:
         <p><b>Open Pipeline at Risk (0–1 contacts):</b> ${open_pipeline_risk:,.0f}</p>
         <p><b>Modeled Enhanced Win Rate:</b> {enhanced_win_rate:.1%}</p>
         <p><b>Incremental Won Pipeline (modeled):</b> ${incremental_won_pipeline:,.0f}</p>
+
         <h3>Executive Summary</h3>
         <ul>
           {''.join([f"<li>{html.escape(b)}</li>" for b in bullets])}
         </ul>
+
         <p style="margin-top:20px;">
           Learn more about Buying Group Automation:
           https://www.revopsglobal.com/buying-group-automation/
@@ -692,6 +698,7 @@ if opps_file and roles_file:
       </body>
     </html>
     """
+
     st.download_button(
         "Download HTML Summary",
         data=report_html.encode("utf-8"),
@@ -701,7 +708,7 @@ if opps_file and roles_file:
     section_end()
 
     # -----------------------
-    # CTA Section
+    # CTA
     # -----------------------
     section_start("Buying Group Automation")
     st.markdown(
