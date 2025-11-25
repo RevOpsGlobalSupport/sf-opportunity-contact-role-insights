@@ -101,17 +101,31 @@ def label_with_tooltip(label: str, tooltip: str):
 # -----------------------
 st.set_page_config(page_title="SFDC Opportunity Contact Role Insights", layout="wide")
 
-# Logo + hyperlink header
+# Logo + title header row (bigger logo, everything starts below)
 logo_url = "https://www.revopsglobal.com/wp-content/uploads/2024/09/Footer_Logo.png"
 site_url = "https://www.revopsglobal.com/"
 
 st.markdown(
     f"""
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
-      <a href="{site_url}" target="_blank">
-        <img src="{logo_url}" style="height:50px;" />
+    <div style="
+        display:flex;
+        align-items:center;
+        gap:18px;
+        padding:8px 0 14px 0;
+        border-bottom:1px solid #e5e7eb;
+        margin-bottom:14px;
+    ">
+      <a href="{site_url}" target="_blank" style="display:flex;align-items:center;">
+        <img src="{logo_url}" style="height:72px;" />
       </a>
-      <h2 style="margin:0;padding:0;">Salesforce Opportunity Contact Role Insights</h2>
+      <div>
+        <div style="font-size:26px;font-weight:700;line-height:1.1;">
+          Salesforce Opportunity Contact Role Insights
+        </div>
+        <div style="font-size:14px;color:#6b7280;margin-top:4px;">
+          Measure Contact Role coverage and its impact on win rates
+        </div>
+      </div>
     </div>
     """,
     unsafe_allow_html=True
