@@ -82,11 +82,7 @@ def parse_date(x):
 # Tooltip helper (CSS hover)
 # -----------------------
 def label_with_tooltip(label: str, tooltip: str):
-    """
-    Renders a label with a hover tooltip using CSS.
-    """
     safe_tip = html.escape(tooltip)
-
     st.markdown(
         f"""
         <div class="tooltip-wrap">
@@ -104,9 +100,24 @@ def label_with_tooltip(label: str, tooltip: str):
 # Streamlit App
 # -----------------------
 st.set_page_config(page_title="SFDC Opportunity Contact Role Insights", layout="wide")
-st.title("Salesforce Opportunity Contact Role Insights")
 
-# CSS for tooltips (updated for readability)
+# Logo + hyperlink header
+logo_url = "https://www.revopsglobal.com/wp-content/uploads/2024/09/Footer_Logo.png"
+site_url = "https://www.revopsglobal.com/"
+
+st.markdown(
+    f"""
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:6px;">
+      <a href="{site_url}" target="_blank">
+        <img src="{logo_url}" style="height:50px;" />
+      </a>
+      <h2 style="margin:0;padding:0;">Salesforce Opportunity Contact Role Insights</h2>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+# CSS for tooltips (readable)
 st.markdown("""
 <style>
 .tooltip-wrap {
@@ -121,15 +132,14 @@ st.markdown("""
   display: inline-block;
   cursor: help;
   font-size: 14px;
-  opacity: 0.9; /* icon still slightly subtle */
+  opacity: 0.9;
 }
 
-/* Tooltip text */
 .tooltip-icon .tooltip-text {
   visibility: hidden;
   width: 280px;
-  background-color: #111827; /* solid dark background */
-  color: #FFFFFF;           /* solid white text */
+  background-color: #111827;
+  color: #FFFFFF;
   text-align: left;
   border-radius: 6px;
   padding: 10px 12px;
@@ -138,14 +148,13 @@ st.markdown("""
   bottom: 135%;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 14px;          /* increased from 12px */
+  font-size: 14px;
   line-height: 1.45;
   box-shadow: 0 4px 12px rgba(0,0,0,0.35);
   white-space: normal;
-  opacity: 1;               /* ensure no transparency */
+  opacity: 1;
 }
 
-/* Tooltip arrow */
 .tooltip-icon .tooltip-text::after {
   content: "";
   position: absolute;
@@ -157,12 +166,66 @@ st.markdown("""
   border-color: #111827 transparent transparent transparent;
 }
 
-/* Show on hover */
 .tooltip-icon:hover .tooltip-text {
   visibility: visible;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# -----------------------
+# Instructions section (expandable)
+# -----------------------
+with st.expander("📌 How to export Salesforce data & use this app", expanded=False):
+    st.markdown(
+        """
+**Step 1 — Export Opportunity Data from Salesforce**
+
+Create an Opportunities report in Salesforce. Use **Tabular** format and include the following fields, in this exact order:  
+Opportunity ID, Opportunity Name, Account ID, Amount, Type, Stage, Created Date, Closed Date, Opportunity Owner.
+
+- Go to **Reports → New Report → Select Opportunities**
+- Switch to **Tabular**
+- Add the fields in the exact order listed above
+- Set filters to:
+  - **Show Me:** All Opportunities  
+  - **Date Range:** All Time (or the period you want to analyze)
+- Export the report as a **CSV file**
+
+You will upload this into the app as the **Opportunities CSV**.
+
+---
+
+**Step 2 — Export Opportunity Contact Role Data**
+
+Create an **Opportunities with Contact Roles** report. Again use **Tabular** format and include these fields, exactly in this order:  
+Opportunity ID, Opportunity Name, Account ID, Amount, Type, Stage, Opportunity Created Date, Opportunity Closed Date, Opportunity Owner, Contact ID, Title, Department, Role, Is Primary.
+
+- Go to **Reports → New Report → Opportunities with Contact Roles**
+- Switch to **Tabular**
+- Add fields in the exact order above
+- Set filters the same way:
+  - **Show Me:** All Opportunities  
+  - **Date Range:** All Time
+- Export as a **CSV file**
+
+You will upload this into the app as the **Opportunities with Contact Roles CSV**.
+
+---
+
+**Step 3 — Upload Data into This App**
+
+After exporting both reports:
+
+- Upload each CSV into the correct upload box in this app.
+
+Do **not**:
+- Change column order
+- Rename columns
+- Add/delete columns
+- Insert blank rows or columns
+- Paste additional headers
+        """
+    )
 
 st.markdown(
     """
@@ -176,8 +239,25 @@ The app normalizes common Salesforce header variations
 """
 )
 
-opps_file = st.file_uploader("Upload Opportunities CSV", type=["csv"], key="opps")
-roles_file = st.file_uploader("Upload Opportunities with Contact Roles CSV", type=["csv"], key="roles")
+# Sample CSV links
+sample_opps_url = "https://drive.google.com/file/d/11bNN1lSs6HtPyXVV0k9yYboO6XXdI85H/view?usp=sharing"
+sample_roles_url = "https://drive.google.com/file/d/1-w_yFF0_naXGUEX00TKOMDT2bAW7ehPE/view?usp=sharing"
+
+st.markdown(
+    f"""
+**Upload Opportunities CSV**  
+[Download sample]({sample_opps_url})
+"""
+)
+opps_file = st.file_uploader("", type=["csv"], key="opps")
+
+st.markdown(
+    f"""
+**Upload Opportunities with Contact Roles CSV**  
+[Download sample]({sample_roles_url})
+"""
+)
+roles_file = st.file_uploader("", type=["csv"], key="roles")
 
 if opps_file and roles_file:
     try:
@@ -401,7 +481,7 @@ if opps_file and roles_file:
         st.write(f"**${incremental_won_pipeline:,.0f}**")
 
     # -----------------------
-    # Executive Summary (with conditional open-coverage bullet)
+    # Executive Summary (conditional open-coverage bullet)
     # -----------------------
     st.subheader("Executive Summary")
 
@@ -413,7 +493,6 @@ if opps_file and roles_file:
         f"multi-threading and successful outcomes."
     )
 
-    # Show this bullet ONLY if Open avg is below Won avg OR below industry standard
     if (avg_cr_open < avg_cr_won) or (avg_cr_open < industry_cr_open):
         bullets.append(
             f"Open opportunities currently average **{avg_cr_open:.1f}** contact roles. Increasing this "
@@ -436,6 +515,22 @@ if opps_file and roles_file:
 
     for b in bullets:
         st.markdown("- " + b)
+
+    # -----------------------
+    # CTA Section after results
+    # -----------------------
+    st.markdown("---")
+    st.markdown(
+        """
+### Want to drive higher win rates with Buying Groups?
+
+RevOps Global’s **Buying Group Automation** helps sales teams identify stakeholders, close coverage gaps,  
+and multi-thread deals faster — directly improving Contact Role coverage and conversion.
+
+👉 **Learn more here:**  
+https://www.revopsglobal.com/buying-group-automation/
+        """
+    )
 
 else:
     st.info("Upload both CSV files above to generate insights.")
