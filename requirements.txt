@@ -2,3 +2,4 @@ streamlit
 pandas
 python-dateutil
 reportlab>=4.0.0
+matplotlib>=3.7.0
