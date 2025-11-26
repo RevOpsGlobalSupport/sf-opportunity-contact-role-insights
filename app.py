@@ -450,9 +450,7 @@ if opps_file and roles_file:
     opps["Close Date"] = opps["Close Date"].apply(parse_date)
     opps["Type"] = opps["Type"].fillna("").astype(str)
 
-    # -------------------------------
     # ✅ GLOBAL OPPORTUNITY TYPE FILTER
-    # -------------------------------
     all_types = sorted([t for t in opps["Type"].dropna().unique().tolist() if str(t).strip() != ""])
     section_start("Global Filter — Opportunity Type")
     st.caption("Filter the entire analysis by Opportunity Type. All insights below will update based on your selection.")
@@ -466,11 +464,14 @@ if opps_file and roles_file:
     if selected_types:
         opps = opps[opps["Type"].isin(selected_types)].copy()
 
-    # Filter roles to only the remaining Opp IDs
+    # ✅ CRITICAL FIX: reset index so masks align
+    opps = opps.reset_index(drop=True)
+
+    # Filter roles to only current opp IDs
     filtered_opp_ids = opps["Opportunity ID"].dropna().unique()
     roles = roles[roles["Opportunity ID"].isin(filtered_opp_ids)].copy()
 
-    # Rebuild stage series after filtering
+    # Stage series after filtering + aligned to opps index
     stage = opps["Stage"].fillna("").astype(str)
 
     # Stage Mapping
@@ -505,20 +506,21 @@ if opps_file and roles_file:
     user_mapped_any = any([early_stages, mid_stages, late_stages, won_stages, lost_stages])
     section_end()
 
+    # ✅ Build masks as Series indexed to opps.index
     if user_mapped_any:
-        won_mask  = stage.isin(won_stages)
-        lost_mask = stage.isin(lost_stages)
-        early_mask = stage.isin(early_stages)
-        mid_mask   = stage.isin(mid_stages)
-        late_mask  = stage.isin(late_stages)
+        won_mask  = pd.Series(stage.isin(won_stages).to_numpy(), index=opps.index)
+        lost_mask = pd.Series(stage.isin(lost_stages).to_numpy(), index=opps.index)
+        early_mask = pd.Series(stage.isin(early_stages).to_numpy(), index=opps.index)
+        mid_mask   = pd.Series(stage.isin(mid_stages).to_numpy(), index=opps.index)
+        late_mask  = pd.Series(stage.isin(late_stages).to_numpy(), index=opps.index)
         open_mask = ~(won_mask | lost_mask)
     else:
-        won_mask = stage.str.contains("Won", case=False, na=False)
-        lost_mask = stage.str.contains("Lost", case=False, na=False)
-        open_mask = ~won_mask & ~lost_mask
-        early_mask = open_mask
-        mid_mask = open_mask
-        late_mask = open_mask
+        won_mask = pd.Series(stage.str.contains("Won", case=False, na=False).to_numpy(), index=opps.index)
+        lost_mask = pd.Series(stage.str.contains("Lost", case=False, na=False).to_numpy(), index=opps.index)
+        open_mask = ~(won_mask | lost_mask)
+        early_mask = open_mask.copy()
+        mid_mask = open_mask.copy()
+        late_mask = open_mask.copy()
 
     # Contact counts per opp
     cr_counts = roles.groupby("Opportunity ID")["Contact ID"].nunique()
@@ -540,9 +542,9 @@ if opps_file and roles_file:
     opps_one_cr = opps[opps["Opportunity ID"].isin(one_cr_ids)]["Opportunity ID"].nunique()
     pipeline_one_cr = opps[opps["Opportunity ID"].isin(one_cr_ids)]["Amount"].sum()
 
-    open_opps = opps[open_mask].copy()
-    won_opps = opps[won_mask].copy()
-    lost_opps = opps[lost_mask].copy()
+    open_opps = opps.loc[open_mask].copy()
+    won_opps = opps.loc[won_mask].copy()
+    lost_opps = opps.loc[lost_mask].copy()
 
     won_count = won_opps["Opportunity ID"].nunique()
     lost_count = lost_opps["Opportunity ID"].nunique()
@@ -552,13 +554,11 @@ if opps_file and roles_file:
     avg_cr_won = won_opps["contact_count"].mean() if not won_opps.empty else 0
     avg_cr_open = open_opps["contact_count"].mean() if not open_opps.empty else 0
 
-    # Red-flag: Won with zero contacts
     won_zero_df = won_opps[won_opps["contact_count"] == 0].copy()
     won_zero_count = won_zero_df["Opportunity ID"].nunique()
     won_zero_pipeline = won_zero_df["Amount"].sum()
     won_zero_pct = (won_zero_count / won_count) if won_count > 0 else 0
 
-    # Time metrics
     def days_diff(row):
         if pd.isna(row["Created Date"]) or pd.isna(row["Close Date"]):
             return None
@@ -585,9 +585,8 @@ if opps_file and roles_file:
     late_gate_target = st.slider("Gate 2 — Late stage minimum contacts", 0.0, 10.0, float(default_late_gate), 0.5)
     section_end()
 
-    # Gate findings
-    mid_df = opps[mid_mask].copy() if user_mapped_any else open_opps.copy()
-    late_df = opps[late_mask].copy() if user_mapped_any else open_opps.copy()
+    mid_df = opps.loc[mid_mask].copy() if user_mapped_any else open_opps.copy()
+    late_df = opps.loc[late_mask].copy() if user_mapped_any else open_opps.copy()
 
     mid_below_gate = mid_df[mid_df["contact_count"] < mid_gate_target]
     late_below_gate = late_df[late_df["contact_count"] < late_gate_target]
@@ -1009,7 +1008,7 @@ if opps_file and roles_file:
 
     section_end()
 
-    # Red-flag details section
+    # Red flag details section
     won_zero_rows_for_pdf = []
     if won_zero_count > 0:
         section_start("Red Flag — Won Deals Missing Contact Roles")
@@ -1035,7 +1034,7 @@ if opps_file and roles_file:
             )
         section_end()
 
-    # Owner Rollup — inherits global filter now
+    # Owner Rollup — inherits global filter
     owner_rollup_rows = []
     if "Opportunity Owner" in opps.columns:
         section_start("Owner Coverage Rollup (Coaching View)")
@@ -1068,11 +1067,12 @@ if opps_file and roles_file:
             st.markdown(f"- **{line}**")
         section_end()
 
-    # Top Open Opps — inherits global filter now
+    # Top Open Opps — inherits global filter
     section_start("Top Open Opportunities to Fix First")
     st.caption("Prioritize multi-threading these deals based on value, age, and low contact coverage.")
 
     top_opps_rows = []
+    open_df = open_opps.copy()
     if not open_df.empty:
         tmp = open_df.copy()
         tmp["age_days"] = (today - tmp["Created Date"]).dt.days
@@ -1098,7 +1098,7 @@ if opps_file and roles_file:
         st.write("No open opportunities found.")
     section_end()
 
-    # Build PDF charts (matplotlib)
+    # Build PDF charts
     pdf_chart_pngs = []
 
     fig1 = plt.figure(figsize=(7.2, 3.2))
