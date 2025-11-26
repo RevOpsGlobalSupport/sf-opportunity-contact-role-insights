@@ -108,7 +108,7 @@ def show_value(value: str):
     st.markdown(f"<div class='kpi-value'>{value}</div>", unsafe_allow_html=True)
 
 # -----------------------
-# Section "card" wrappers
+# Section wrappers
 # -----------------------
 def section_start(title: str):
     st.markdown(f"""
@@ -122,7 +122,7 @@ def section_end():
 
 
 # -----------------------
-# PDF builder helpers
+# PDF helpers
 # -----------------------
 LOGO_URL = "https://www.revopsglobal.com/wp-content/uploads/2024/09/Footer_Logo.png"
 SITE_URL = "https://www.revopsglobal.com/"
@@ -137,7 +137,6 @@ def fetch_logo_bytes(url: str):
         return None
 
 def pdf_watermark_and_footer(c: canvas.Canvas, doc):
-    # Watermark (light gray)
     c.saveState()
     c.setFont("Helvetica-Bold", 50)
     c.setFillColor(colors.HexColor("#E6EAF0"))
@@ -146,7 +145,6 @@ def pdf_watermark_and_footer(c: canvas.Canvas, doc):
     c.drawCentredString(0, 0, "RevOps Global")
     c.restoreState()
 
-    # Footer
     c.saveState()
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.grey)
@@ -167,7 +165,8 @@ def build_pdf_report(
     owner_rollup_rows,
     top_opps_rows,
     chart_pngs,
-    segment_rows
+    segment_rows,
+    won_zero_rows
 ):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -188,7 +187,6 @@ def build_pdf_report(
 
     story = []
 
-    # Logo
     logo_bytes = fetch_logo_bytes(LOGO_URL)
     if logo_bytes:
         try:
@@ -230,6 +228,12 @@ def build_pdf_report(
         story.append(Paragraph(f"• {html.escape(b)}", styles["Body"]))
     story.append(Spacer(1, 0.12*inch))
 
+    if won_zero_rows:
+        story.append(Paragraph("Red Flag — Won Deals Missing Contact Roles", styles["H2"]))
+        for r in won_zero_rows:
+            story.append(Paragraph(f"• {html.escape(r)}", styles["Body"]))
+        story.append(Spacer(1, 0.12*inch))
+
     story.append(Paragraph("Insights", styles["H2"]))
     story.append(Paragraph(
         "The following charts summarize the relationship between stakeholder coverage, velocity, and win rate.",
@@ -265,7 +269,7 @@ def build_pdf_report(
 
     story.append(Paragraph("Owner Coverage Rollup (Coaching View)", styles["H2"]))
     story.append(Paragraph(
-        "Coach the owners with the largest under-covered open pipeline first.",
+        "Coach the owners with the highest under-covered open pipeline first.",
         styles["Body"]
     ))
     if owner_rollup_rows:
@@ -330,9 +334,6 @@ st.markdown(
 
 st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
 
-# -----------------------
-# CSS
-# -----------------------
 st.markdown("""
 <style>
 :root{
@@ -355,7 +356,6 @@ st.markdown("""
   margin: 6px 0 12px 0; border-radius:2px;
 }
 
-/* Tooltip styles */
 .tooltip-wrap { display:inline-flex; align-items:center; gap:6px; margin-top:4px; }
 .tooltip-icon { position:relative; cursor:help; font-size:14px; opacity:0.9; }
 .tooltip-icon .tooltip-text{
@@ -373,9 +373,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# -----------------------
 # Instructions
-# -----------------------
 with st.expander("📌 How to export Salesforce data & use this app", expanded=False):
     st.markdown(
         """
@@ -447,16 +445,13 @@ if opps_file and roles_file:
     if missing_roles:
         st.error("Contact Roles file missing columns: " + ", ".join(missing_roles)); st.stop()
 
-    # Clean
     opps["Amount"] = pd.to_numeric(opps["Amount"], errors="coerce").fillna(0)
     opps["Created Date"] = opps["Created Date"].apply(parse_date)
     opps["Close Date"] = opps["Close Date"].apply(parse_date)
 
     stage = opps["Stage"].fillna("").astype(str)
 
-    # -----------------------
-    # Stage Mapping UI (dynamic per customer)
-    # -----------------------
+    # Stage Mapping
     section_start("Stage Mapping (Customer-specific)")
     st.caption("Map your Salesforce stages into Early, Mid, Late, Won, and Lost buckets so stage gates apply correctly.")
 
@@ -488,9 +483,6 @@ if opps_file and roles_file:
     user_mapped_any = any([early_stages, mid_stages, late_stages, won_stages, lost_stages])
     section_end()
 
-    # -----------------------
-    # Mapping-aware masks
-    # -----------------------
     if user_mapped_any:
         won_mask  = stage.isin(won_stages)
         lost_mask = stage.isin(lost_stages)
@@ -539,7 +531,7 @@ if opps_file and roles_file:
     avg_cr_open = open_opps["contact_count"].mean() if not open_opps.empty else 0
 
     # Red-flag: Won with zero contacts
-    won_zero_df = won_opps[won_opps["contact_count"] == 0]
+    won_zero_df = won_opps[won_opps["contact_count"] == 0].copy()
     won_zero_count = won_zero_df["Opportunity ID"].nunique()
     won_zero_pipeline = won_zero_df["Amount"].sum()
     won_zero_pct = (won_zero_count / won_count) if won_count > 0 else 0
@@ -560,9 +552,7 @@ if opps_file and roles_file:
     open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days if not open_opps.empty else None
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
-    # -----------------------
     # Stage Gate Targets
-    # -----------------------
     section_start("Stage Coverage Gates")
     st.caption("Define minimum Contact Roles expected by deal phase (Mid & Late).")
 
@@ -573,9 +563,7 @@ if opps_file and roles_file:
     late_gate_target = st.slider("Gate 2 — Late stage minimum contacts", 0.0, 10.0, float(default_late_gate), 0.5)
     section_end()
 
-    # -----------------------
-    # Gate Compliance Metrics + Callouts
-    # -----------------------
+    # Gate findings
     mid_df = opps[mid_mask].copy() if user_mapped_any else open_opps.copy()
     late_df = opps[late_mask].copy() if user_mapped_any else open_opps.copy()
 
@@ -593,7 +581,7 @@ if opps_file and roles_file:
     late_below_pipe = late_below_gate["Amount"].sum()
 
     section_start("Stage Gate Coverage Findings")
-    st.caption("Quantifies how many Mid/Late deals fall below your buying-group targets and how much pipeline is at risk.")
+    st.caption("Quantifies Mid/Late deals below buying-group targets and pipeline at risk.")
     label_with_tooltip("Mid-stage opps below Gate 1", "Mid bucket opps below the Gate 1 contact target.")
     show_value(f"{mid_below_pct:.1%} ({mid_below_cnt:,} of {mid_cnt:,})")
     label_with_tooltip("Mid-stage pipeline below Gate 1", "Total Amount of Mid opps below Gate 1.")
@@ -625,19 +613,15 @@ if opps_file and roles_file:
 
     section_end()
 
-    # -----------------------
     # Pipeline Risk (Open)
-    # -----------------------
     open_df = open_opps.copy()
     open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
-
     open_pipeline = open_opps["Amount"].sum() if not open_opps.empty else 0
     open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
     open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
     open_opps_total = open_df["Opportunity ID"].nunique() if not open_df.empty else 0
     risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
 
-    # uplift helper
     def modeled_win_rate_for_open(avg_open_contacts, base_win_rate, target_contacts):
         cur = max(avg_open_contacts, 1e-6)
         improvement_factor = min(1.8, target_contacts / cur)
@@ -651,9 +635,7 @@ if opps_file and roles_file:
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
     section_end()
 
-    # -----------------------
     # Buying Group Coverage Score
-    # -----------------------
     pct_2plus_open = open_df[open_df["contact_count"] >= 2]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
     pct_zero_open  = open_df[open_df["contact_count"] == 0]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
     gap_open_vs_won = max(0, avg_cr_won - avg_cr_open) if avg_cr_won and avg_cr_open is not None else 0
@@ -672,9 +654,7 @@ if opps_file and roles_file:
     show_value(f"{score:.0f} / 100 — {score_label}")
     section_end()
 
-    # -----------------------
     # Core Metrics
-    # -----------------------
     section_start("Core Metrics")
     st.caption("Baseline deal volume, pipeline, and current win rate.")
     label_with_tooltip("Total Opportunities", "Unique opportunities in the export.")
@@ -685,9 +665,7 @@ if opps_file and roles_file:
     show_value(f"{win_rate:.1%}")
     section_end()
 
-    # -----------------------
-    # Contact Role Coverage
-    # -----------------------
+    # Coverage
     section_start("Contact Role Coverage")
     st.caption("Overall stakeholder coverage and where pipeline is missing roles.")
     label_with_tooltip("Opportunities with Contact Roles", "Unique opps appearing in Contact Roles export.")
@@ -704,9 +682,7 @@ if opps_file and roles_file:
     show_value(f"${pipeline_one_cr:,.0f}")
     section_end()
 
-    # -----------------------
-    # Contact Roles by Outcome + Red flag
-    # -----------------------
+    # Outcome roles
     section_start("Contact Roles by Outcome")
     st.caption("Buying-group depth differs strongly between won, lost, and open deals.")
     label_with_tooltip("Avg Contact Roles – Won", "Average roles per Won opp.")
@@ -716,20 +692,17 @@ if opps_file and roles_file:
     label_with_tooltip("Avg Contact Roles – Open", "Average roles per Open opp.")
     show_value(f"{avg_cr_open:.1f}")
 
-    # Red-flag KPI only if present
     if won_zero_count > 0:
         label_with_tooltip(
             "⚠️ Won Opps with 0 Contact Roles (Red Flag)",
-            "Won opportunities that have no buying-group contacts. This indicates missing CRM hygiene or tracking gaps."
+            "Won opportunities that have no buying-group contacts. Indicates CRM hygiene or tracking gaps."
         )
         show_value(f"{won_zero_count:,} ({won_zero_pct:.1%} of Won) — ${won_zero_pipeline:,.0f} pipeline")
     section_end()
 
-    # -----------------------
-    # Time to Close
-    # -----------------------
+    # Time to close
     section_start("Time to Close")
-    st.caption("Velocity patterns: wins close faster, stale open deals convert poorly.")
+    st.caption("Velocity patterns: wins close faster; stale open deals convert poorly.")
     label_with_tooltip("Avg days to close – Won", "Close Date − Created Date for Won opps.")
     show_value(f"{avg_days_won:.0f} days" if avg_days_won else "0 days")
     label_with_tooltip("Avg days to close – Lost", "Close Date − Created Date for Lost opps.")
@@ -738,9 +711,7 @@ if opps_file and roles_file:
     show_value(f"{avg_age_open:.0f} days" if avg_age_open else "0 days")
     section_end()
 
-    # =========================================================
-    # Simulator — Target Contact Coverage
-    # =========================================================
+    # Simulator
     section_start("Simulator — Target Contact Coverage")
     st.caption("Adjust target buying-group size and see modeled win-rate and revenue lift.")
     target_contacts = st.slider("Target avg contacts on Open Opps", 0.0, 5.0, 2.0, 0.5)
@@ -755,9 +726,7 @@ if opps_file and roles_file:
     show_value(f"${incremental_won_pipeline:,.0f}")
     section_end()
 
-    # -----------------------
-    # Coverage-Adjusted Forecast
-    # -----------------------
+    # Coverage-adjusted forecast
     section_start("Coverage-Adjusted Forecast")
     st.caption("A conservative forecast that discounts under-covered open deals.")
 
@@ -795,9 +764,7 @@ if opps_file and roles_file:
 
     section_end()
 
-    # -----------------------
-    # Segment uplift by deal size bands
-    # -----------------------
+    # Segment uplift
     section_start("Segment Uplift (Deal Size Bands)")
     st.caption("Shows where coverage uplift is concentrated by deal size.")
 
@@ -859,9 +826,7 @@ if opps_file and roles_file:
 
     section_end()
 
-    # -----------------------
     # Executive Summary
-    # -----------------------
     section_start("Executive Summary")
     st.caption("Leadership-ready takeaways summarizing coverage patterns, risks, and modeled uplift.")
     bullets = []
@@ -898,353 +863,10 @@ if opps_file and roles_file:
         st.markdown("- " + b)
     section_end()
 
-    # -----------------------
     # Insights (Charts)
-    # -----------------------
     section_start("Insights")
     st.caption("Visualizes relationships between contact coverage, win rate, pipeline risk, and velocity.")
 
     chart_df = opps.copy()
     chart_df["Stage Group"] = "Open"
-    chart_df.loc[won_mask, "Stage Group"] = "Won"
-    chart_df.loc[lost_mask, "Stage Group"] = "Lost"
-
-    chart_df["contact_count"] = pd.to_numeric(chart_df["contact_count"], errors="coerce").fillna(0)
-    chart_df["Amount"] = pd.to_numeric(chart_df["Amount"], errors="coerce").fillna(0)
-
-    def contact_bucket(n):
-        n = float(n) if pd.notna(n) else 0
-        if n <= 0: return "0"
-        if n == 1: return "1"
-        if n == 2: return "2"
-        if n == 3: return "3"
-        return "4+"
-
-    chart_df["Contact Bucket"] = chart_df["contact_count"].apply(contact_bucket)
-    bucket_order = ["0", "1", "2", "3", "4+"]
-
-    # 1) Win rate vs contacts
-    closed_df = chart_df[chart_df["Stage Group"].isin(["Won", "Lost"])]
-    winrate_bucket = closed_df.groupby("Contact Bucket").agg(
-        won=("Stage Group", lambda s: (s == "Won").sum()),
-        lost=("Stage Group", lambda s: (s == "Lost").sum())
-    ).reset_index()
-    winrate_bucket["Win Rate"] = winrate_bucket.apply(
-        lambda r: r["won"] / (r["won"] + r["lost"]) if (r["won"] + r["lost"]) > 0 else 0,
-        axis=1
-    )
-
-    st.caption("Win rate increases as more stakeholders are engaged.")
-    st.altair_chart(
-        alt.Chart(winrate_bucket).mark_line(point=True).encode(
-            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
-            y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%"), title="Win Rate"),
-            tooltip=["Contact Bucket", alt.Tooltip("Win Rate:Q", format=".1%"), "won", "lost"]
-        ).properties(height=260),
-        use_container_width=True
-    )
-
-    # 2) Open pipeline by coverage
-    open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
-    open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
-        lambda n: "0 Contact Roles" if n == 0 else ("1 Contact Role" if n == 1 else "2+ Contact Roles")
-    )
-    open_pipeline_bucket = open_chart_df.groupby("Open Coverage Bucket")["Amount"].sum().reindex(
-        ["0 Contact Roles", "1 Contact Role", "2+ Contact Roles"]
-    ).fillna(0).reset_index().rename(columns={"Amount": "Open Pipeline"})
-
-    st.caption("How much open pipeline is under-covered today.")
-    st.altair_chart(
-        alt.Chart(open_pipeline_bucket).mark_bar().encode(
-            x=alt.X("Open Coverage Bucket:N", title="Open Opportunity Coverage"),
-            y=alt.Y("Open Pipeline:Q", title="Open Pipeline ($)"),
-            tooltip=["Open Coverage Bucket", alt.Tooltip("Open Pipeline:Q", format=",.0f")]
-        ).properties(height=260),
-        use_container_width=True
-    )
-
-    # 3) Velocity vs contacts (Won/Lost close days, Open age)
-    time_df = chart_df.copy()
-    time_df["days_to_close"] = time_df.apply(days_diff, axis=1)
-    time_df["open_age_days"] = None
-    open_mask_local = (time_df["Stage Group"] == "Open") & time_df["Created Date"].notna()
-    time_df.loc[open_mask_local, "open_age_days"] = (today - time_df.loc[open_mask_local, "Created Date"]).dt.days
-
-    agg_rows = []
-    for sg in ["Won", "Lost"]:
-        tmp = time_df[time_df["Stage Group"] == sg]
-        grp = tmp.groupby("Contact Bucket")["days_to_close"].mean().reindex(bucket_order).reset_index()
-        grp["Stage Group"] = sg
-        grp = grp.rename(columns={"days_to_close": "Avg Days"})
-        agg_rows.append(grp)
-
-    tmp_open = time_df[time_df["Stage Group"] == "Open"]
-    grp_open = tmp_open.groupby("Contact Bucket")["open_age_days"].mean().reindex(bucket_order).reset_index()
-    grp_open["Stage Group"] = "Open"
-    grp_open = grp_open.rename(columns={"open_age_days": "Avg Days"})
-    agg_rows.append(grp_open)
-
-    avg_days_bucket = pd.concat(agg_rows, ignore_index=True)
-
-    st.caption("More contact roles correlate with faster closes and younger open pipeline.")
-    st.altair_chart(
-        alt.Chart(avg_days_bucket).mark_bar().encode(
-            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
-            y=alt.Y("Avg Days:Q", title="Avg Days (Close for Won/Lost, Age for Open)"),
-            color=alt.Color("Stage Group:N", title="Outcome"),
-            tooltip=["Stage Group", "Contact Bucket", alt.Tooltip("Avg Days:Q", format=",.0f")]
-        ).properties(height=300),
-        use_container_width=True
-    )
-
-    # 4) Modeled uplift bar
-    impact_df = pd.DataFrame({
-        "Scenario": ["Current Win Rate", "Enhanced Win Rate"],
-        "Win Rate": [win_rate, enhanced_win_rate]
-    })
-    st.caption("Modeled uplift if open opportunities match target coverage.")
-    st.altair_chart(
-        alt.Chart(impact_df).mark_bar().encode(
-            x=alt.X("Scenario:N", title=""),
-            y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%"), title="Win Rate"),
-            tooltip=["Scenario", alt.Tooltip("Win Rate:Q", format=".1%")]
-        ).properties(height=240),
-        use_container_width=True
-    )
-
-    # 5) NEW: Zero-contact rate by outcome (red-flag visual)
-    zero_rate_df = chart_df.groupby("Stage Group").agg(
-        opps=("Opportunity ID", "nunique"),
-        zero_opps=("contact_count", lambda s: (s == 0).sum())
-    ).reset_index()
-    zero_rate_df["Zero Contact Rate"] = zero_rate_df.apply(
-        lambda r: r["zero_opps"] / r["opps"] if r["opps"] > 0 else 0, axis=1
-    )
-
-    st.caption("Red-flag check: any Won deals with zero contact roles should be reviewed.")
-    st.altair_chart(
-        alt.Chart(zero_rate_df).mark_bar().encode(
-            x=alt.X("Stage Group:N", title="Outcome"),
-            y=alt.Y("Zero Contact Rate:Q", axis=alt.Axis(format="%"), title="Zero-Contact Rate"),
-            tooltip=["Stage Group", "zero_opps", "opps", alt.Tooltip("Zero Contact Rate:Q", format=".1%")]
-        ).properties(height=240),
-        use_container_width=True
-    )
-
-    if won_zero_count > 0:
-        st.error(
-            f"Red flag: {won_zero_count:,} Won opportunities ({won_zero_pct:.1%} of wins) have 0 contact roles. "
-            "This suggests missing CRM hygiene or roles not being captured."
-        )
-
-    section_end()
-
-    # -----------------------
-    # Owner rollups
-    # -----------------------
-    owner_rollup_rows = []
-    if "Opportunity Owner" in opps.columns:
-        section_start("Owner Coverage Rollup (Coaching View)")
-        st.caption("Coach owners with the largest under-covered open pipeline first.")
-
-        owner_df = open_opps.copy()
-        owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("Unassigned")
-
-        roll = owner_df.groupby("Opportunity Owner").agg(
-            open_opps=("Opportunity ID", "nunique"),
-            avg_contacts=("contact_count", "mean"),
-            undercovered_pct=("contact_count", lambda s: (s <= 1).mean()),
-            open_pipeline=("Amount", "sum")
-        ).reset_index().sort_values("open_pipeline", ascending=False).head(8)
-
-        for _, r in roll.iterrows():
-            line = (
-                f"{r['Opportunity Owner']} — "
-                f"{int(r['open_opps'])} open opps, "
-                f"avg contacts {r['avg_contacts']:.1f}, "
-                f"under-covered {r['undercovered_pct']:.0%}, "
-                f"open pipeline ${r['open_pipeline']:,.0f}"
-            )
-            owner_rollup_rows.append(line)
-            st.markdown(f"- **{line}**")
-        section_end()
-
-    # -----------------------
-    # Top Open Opps
-    # -----------------------
-    section_start("Top Open Opportunities to Fix First")
-    st.caption("Prioritize multi-threading these deals based on value, age, and low contact coverage.")
-
-    top_opps_rows = []
-    if not open_df.empty:
-        tmp = open_df.copy()
-        tmp["age_days"] = (today - tmp["Created Date"]).dt.days
-        tmp["age_days"] = pd.to_numeric(tmp["age_days"], errors="coerce").fillna(0)
-
-        tmp["priority_score"] = (
-            (tmp["Amount"] / (tmp["Amount"].max() if tmp["Amount"].max() > 0 else 1)) * 0.6 +
-            (tmp["age_days"] / (tmp["age_days"].max() if tmp["age_days"].max() > 0 else 1)) * 0.3 +
-            ((1 - (tmp["contact_count"] / (tmp["contact_count"].max() if tmp["contact_count"].max() > 0 else 1))) * 0.1)
-        )
-
-        top_fix = tmp.sort_values("priority_score", ascending=False).head(10)
-        for _, r in top_fix.iterrows():
-            line = (
-                f"{r.get('Opportunity Name','')} (Owner: {r.get('Opportunity Owner','')}) — "
-                f"${r.get('Amount',0):,.0f}, {r.get('contact_count',0):.0f} contacts, "
-                f"{r.get('age_days',0):.0f} days open"
-            )
-            top_opps_rows.append(line)
-            st.markdown(f"- **{line}**")
-    else:
-        st.write("No open opportunities found.")
-    section_end()
-
-    # -----------------------
-    # Build matplotlib charts for PDF
-    # -----------------------
-    pdf_chart_pngs = []
-
-    fig1 = plt.figure(figsize=(7.2, 3.2))
-    ax1 = fig1.add_subplot(111)
-    ax1.plot(winrate_bucket["Contact Bucket"], winrate_bucket["Win Rate"], marker="o")
-    ax1.set_title("Win Rate vs Contact Roles (bucketed)")
-    ax1.set_xlabel("Contact Roles per Opportunity")
-    ax1.set_ylabel("Win Rate")
-    ax1.yaxis.set_major_formatter(PercentFormatter(1.0))
-    pdf_chart_pngs.append(fig_to_png_bytes(fig1))
-
-    fig2 = plt.figure(figsize=(7.2, 3.2))
-    ax2 = fig2.add_subplot(111)
-    ax2.bar(open_pipeline_bucket["Open Coverage Bucket"], open_pipeline_bucket["Open Pipeline"])
-    ax2.set_title("Open Pipeline by Contact Coverage")
-    ax2.set_xlabel("Open Opportunity Coverage")
-    ax2.set_ylabel("Open Pipeline ($)")
-    ax2.tick_params(axis='x', rotation=10)
-    pdf_chart_pngs.append(fig_to_png_bytes(fig2))
-
-    fig3 = plt.figure(figsize=(7.2, 3.6))
-    ax3 = fig3.add_subplot(111)
-    for sg in ["Won", "Lost", "Open"]:
-        sub = avg_days_bucket[avg_days_bucket["Stage Group"] == sg]
-        ax3.plot(sub["Contact Bucket"], sub["Avg Days"], marker="o", label=sg)
-    ax3.set_title("Velocity vs Contact Roles (Won/Lost close days, Open age)")
-    ax3.set_xlabel("Contact Roles per Opportunity")
-    ax3.set_ylabel("Avg Days")
-    ax3.legend()
-    pdf_chart_pngs.append(fig_to_png_bytes(fig3))
-
-    fig4 = plt.figure(figsize=(6.5, 3.0))
-    ax4 = fig4.add_subplot(111)
-    ax4.bar(impact_df["Scenario"], impact_df["Win Rate"])
-    ax4.set_title("Modeled Win Rate Uplift")
-    ax4.set_ylabel("Win Rate")
-    ax4.yaxis.set_major_formatter(PercentFormatter(1.0))
-    pdf_chart_pngs.append(fig_to_png_bytes(fig4))
-
-    fig5 = plt.figure(figsize=(6.8, 3.0))
-    ax5 = fig5.add_subplot(111)
-    ax5.bar(zero_rate_df["Stage Group"], zero_rate_df["Zero Contact Rate"])
-    ax5.set_title("Zero-Contact Rate by Outcome")
-    ax5.set_ylabel("Zero-Contact Rate")
-    ax5.yaxis.set_major_formatter(PercentFormatter(1.0))
-    pdf_chart_pngs.append(fig_to_png_bytes(fig5))
-
-    # -----------------------
-    # Download Full PDF
-    # -----------------------
-    section_start("Download Full PDF Report")
-    st.caption("Download a branded PDF with metrics, callouts, charts, and next-step lists.")
-
-    metrics_dict = {
-        "Stage Gate Coverage": [
-            ["Mid-stage opps below Gate 1", f"{mid_below_pct:.1%} ({mid_below_cnt:,} of {mid_cnt:,})"],
-            ["Mid-stage pipeline below Gate 1", f"${mid_below_pipe:,.0f}"],
-            ["Late-stage opps below Gate 2", f"{late_below_pct:.1%} ({late_below_cnt:,} of {late_cnt:,})"],
-            ["Late-stage pipeline below Gate 2", f"${late_below_pipe:,.0f}"],
-        ],
-        "Pipeline Risk & Upside": [
-            ["Open Pipeline at Risk", f"${open_pipeline_risk:,.0f}"],
-            ["% Open Opps Under-Covered", f"{risk_pct:.1%}"],
-            ["Incremental Won Pipeline (modeled)", f"${incremental_won_pipeline:,.0f}"],
-        ],
-        "Core Metrics": [
-            ["Total Opportunities", f"{total_opps:,}"],
-            ["Total Pipeline", f"${total_pipeline:,.0f}"],
-            ["Current Win Rate", f"{win_rate:.1%}"],
-        ],
-        "Contact Coverage": [
-            ["Opps with Contact Roles", f"{opps_with_cr:,}"],
-            ["Opps without Contact Roles", f"{opps_without_cr:,}"],
-            ["Pipeline with Contact Roles", f"${pipeline_with_cr:,.0f}"],
-            ["Pipeline without Contact Roles", f"${pipeline_without_cr:,.0f}"],
-            ["Opps with only 1 Contact Role", f"{opps_one_cr:,}"],
-            ["Pipeline with only 1 Contact Role", f"${pipeline_one_cr:,.0f}"],
-            ["⚠️ Won Opps with 0 Contact Roles (Red Flag)", f"{won_zero_count:,} ({won_zero_pct:.1%})"],
-        ],
-        "Contact Roles by Outcome": [
-            ["Avg Contact Roles – Won", f"{avg_cr_won:.1f}"],
-            ["Avg Contact Roles – Lost", f"{avg_cr_lost:.1f}"],
-            ["Avg Contact Roles – Open", f"{avg_cr_open:.1f}"],
-        ],
-        "Time to Close": [
-            ["Avg days to close – Won", f"{avg_days_won:.0f} days" if avg_days_won else "0 days"],
-            ["Avg days to close – Lost", f"{avg_days_lost:.0f} days" if avg_days_lost else "0 days"],
-            ["Avg age of Open opps", f"{avg_age_open:.0f} days" if avg_age_open else "0 days"],
-        ],
-        "Coverage-Adjusted Forecast": [
-            ["Coverage-Adjusted Win Rate (Open)", f"{coverage_adj_win_rate:.1%}"],
-            ["Coverage-Adjusted Expected Won Pipeline (Open)", f"${expected_open_wins_adj:,.0f}"],
-            ["Coverage Risk Gap", f"${forecast_gap:,.0f}"],
-        ],
-        "Modeled Uplift (Simulator Target)": [
-            ["Target Avg Contacts (Open)", f"{target_contacts:.1f}"],
-            ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%}"],
-            ["Incremental Won Pipeline (modeled)", f"${incremental_won_pipeline:,.0f}"],
-        ],
-    }
-
-    pdf_bytes = build_pdf_report(
-        metrics_dict=metrics_dict,
-        bullets=bullets,
-        owner_rollup_rows=owner_rollup_rows,
-        top_opps_rows=top_opps_rows,
-        chart_pngs=pdf_chart_pngs,
-        segment_rows=segment_rows_for_pdf
-    )
-
-    st.download_button(
-        "Download PDF Report (with charts)",
-        data=pdf_bytes,
-        file_name="RevOps_Global_Opportunity_Contact_Role_Insights.pdf",
-        mime="application/pdf"
-    )
-    section_end()
-
-    # CTA
-    section_start("Buying Group Automation")
-    st.markdown(
-        f"""
-RevOps Global’s **Buying Group Automation** helps sales teams identify stakeholders, close coverage gaps,  
-and multi-thread deals faster — directly improving Contact Role coverage and conversion.
-
-👉 **Learn more here:**  
-{CTA_URL}
-        """
-    )
-    section_end()
-
-else:
-    st.info("Upload both CSV files above to generate insights.")
-
-
-# Footer
-st.markdown(
-    f"""
-<hr style="margin-top:26px; border:0; border-top:1px solid #e5e7eb;" />
-<div style="font-size:12px; color:#6b7280; text-align:center; padding:10px 0 2px 0;">
-  © {datetime.now().year} RevOps Global. All rights reserved.
-</div>
-    """,
-    unsafe_allow_html=True
-)
+    chart_df.loc[won_mask, "Stage Group
