@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime
 import html
 import altair as alt
+import re
 
 # PDF deps
 from reportlab.lib.pagesizes import letter
@@ -132,6 +133,41 @@ def wilson_ci(k, n, z=1.96):
     center = (p + z**2/(2*n)) / denom
     margin = (z * ((p*(1-p)/n + z**2/(4*n**2))**0.5)) / denom
     return (max(0.0, center - margin), min(1.0, center + margin))
+
+
+# -----------------------
+# Seniority bucketing
+# -----------------------
+def bucket_seniority(title: str) -> str:
+    if not isinstance(title, str) or title.strip() == "":
+        return "Other / Unknown"
+    t = title.lower()
+
+    # C-level / Founder
+    if re.search(r"\b(chief|ceo|cfo|coo|cto|cio|cmo|cro|cso|cpo|founder|co-founder|president)\b", t):
+        return "C-Level"
+
+    # EVP / SVP
+    if re.search(r"\b(evp|svp|executive vice president|senior vice president)\b", t):
+        return "EVP / SVP"
+
+    # VP
+    if re.search(r"\b(vp|vice president)\b", t):
+        return "VP"
+
+    # Director / Head
+    if re.search(r"\b(director|head of|chief of staff|gm|general manager)\b", t):
+        return "Director / Head"
+
+    # Manager
+    if re.search(r"\b(manager|lead|supervisor)\b", t):
+        return "Manager"
+
+    # Individual contributor / staff
+    if re.search(r"\b(analyst|engineer|specialist|consultant|associate|coordinator|administrator|rep|developer|designer|architect|scientist|strategist|officer)\b", t):
+        return "IC / Staff"
+
+    return "Other / Unknown"
 
 
 # -----------------------
@@ -438,6 +474,7 @@ opps_file = st.file_uploader("", type=["csv"], key="opps")
 st.markdown(f"**Upload Opportunities with Contact Roles CSV**  \n[Download sample]({sample_roles_url})")
 roles_file = st.file_uploader("", type=["csv"], key="roles")
 
+
 if opps_file and roles_file:
     raw_opps = load_csv(opps_file)
     raw_roles = load_csv(roles_file)
@@ -581,7 +618,109 @@ if opps_file and roles_file:
     open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days if not open_opps.empty else None
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
+    # -----------------------
+    # NEW: Seniority Coverage Matrix
+    # -----------------------
+    roles_for_matrix = roles.copy()
+    if "Title" not in roles_for_matrix.columns:
+        roles_for_matrix["Title"] = ""
+
+    roles_for_matrix["Seniority Bucket"] = roles_for_matrix["Title"].apply(bucket_seniority)
+
+    # Map each role to stage bucket via opps
+    stage_lookup = opps.set_index("Opportunity ID")["Stage"].to_dict()
+
+    def stage_bucket_for_id(opp_id):
+        s = stage_lookup.get(opp_id, "")
+        if user_mapped_any:
+            if s in won_stages: return "Won"
+            if s in lost_stages: return "Lost"
+            if s in late_stages: return "Late"
+            if s in mid_stages: return "Mid"
+            if s in early_stages: return "Early"
+            return "Open"
+        else:
+            sl = str(s).lower()
+            if "won" in sl: return "Won"
+            if "lost" in sl: return "Lost"
+            return "Open"
+
+    roles_for_matrix["Stage Bucket"] = roles_for_matrix["Opportunity ID"].apply(stage_bucket_for_id)
+
+    stage_order = ["Early", "Mid", "Late", "Open", "Won", "Lost"]
+    seniority_order = ["C-Level", "EVP / SVP", "VP", "Director / Head", "Manager", "IC / Staff", "Other / Unknown"]
+
+    section_start("Seniority / Job-Level Coverage by Stage")
+    st.caption(
+        "Buckets Contact Role titles into seniority levels and shows where buying-group coverage is concentrated by deal stage."
+    )
+
+    matrix_view = st.radio(
+        "Matrix View",
+        ["# Unique Contact Roles", "Avg Contact Roles per Opportunity"],
+        horizontal=True
+    )
+
+    # Base pivot: unique contacts count
+    base_pivot = roles_for_matrix.pivot_table(
+        index="Stage Bucket",
+        columns="Seniority Bucket",
+        values="Contact ID",
+        aggfunc="nunique",
+        fill_value=0
+    ).reindex(stage_order).fillna(0)
+
+    for col in seniority_order:
+        if col not in base_pivot.columns:
+            base_pivot[col] = 0
+    base_pivot = base_pivot[seniority_order]
+
+    if matrix_view == "# Unique Contact Roles":
+        st.dataframe(
+            base_pivot.style.background_gradient(axis=None),
+            use_container_width=True
+        )
+    else:
+        # Normalize by opp count in each stage
+        opp_stage_counts = opps.copy()
+        opp_stage_counts["Stage Bucket"] = opp_stage_counts["Opportunity ID"].apply(stage_bucket_for_id)
+        opps_per_stage = opp_stage_counts.groupby("Stage Bucket")["Opportunity ID"].nunique()
+
+        avg_pivot = base_pivot.copy()
+        for r in avg_pivot.index:
+            denom = opps_per_stage.get(r, 0)
+            avg_pivot.loc[r] = (avg_pivot.loc[r] / denom) if denom > 0 else 0
+
+        st.dataframe(
+            avg_pivot.style.format("{:.2f}").background_gradient(axis=None),
+            use_container_width=True
+        )
+
+    # Optional stacked bar for readability
+    stacked_df = base_pivot.reset_index().melt(
+        id_vars="Stage Bucket",
+        var_name="Seniority Bucket",
+        value_name="Contact Roles"
+    )
+    stacked_df["Stage Bucket"] = pd.Categorical(stacked_df["Stage Bucket"], categories=stage_order, ordered=True)
+    stacked_df["Seniority Bucket"] = pd.Categorical(stacked_df["Seniority Bucket"], categories=seniority_order, ordered=True)
+
+    st.caption("Stacked view of buying-group seniority coverage per stage.")
+    st.altair_chart(
+        alt.Chart(stacked_df).mark_bar().encode(
+            x=alt.X("Stage Bucket:N", sort=stage_order, title="Stage Bucket"),
+            y=alt.Y("Contact Roles:Q", title="# Unique Contact Roles"),
+            color=alt.Color("Seniority Bucket:N", sort=seniority_order, title="Seniority"),
+            tooltip=["Stage Bucket", "Seniority Bucket", "Contact Roles"]
+        ).properties(height=280),
+        use_container_width=True
+    )
+
+    section_end()
+
+    # -----------------------
     # Stage Gate Targets
+    # -----------------------
     section_start("Stage Coverage Gates")
     st.caption("Define minimum Contact Roles expected by deal phase (Mid & Late).")
 
@@ -641,7 +780,9 @@ if opps_file and roles_file:
 
     section_end()
 
+    # -----------------------
     # Pipeline Risk (Open)
+    # -----------------------
     open_df = open_opps.copy()
     open_df["contact_count"] = pd.to_numeric(open_df["contact_count"], errors="coerce").fillna(0)
 
@@ -793,101 +934,9 @@ if opps_file and roles_file:
 
     section_end()
 
-    # Segment uplift
-    section_start("Segment Uplift (Deal Size Bands)")
-    st.caption("Shows where coverage uplift is concentrated by deal size.")
-
-    seg_rows = []
-    segment_rows_for_pdf = []
-
-    if not open_df.empty:
-        q33 = opps["Amount"].quantile(0.33)
-        q67 = opps["Amount"].quantile(0.67)
-
-        def size_band(a):
-            if a <= q33: return "SMB"
-            if a <= q67: return "Mid-Market"
-            return "Enterprise"
-
-        open_df["Size Band"] = open_df["Amount"].apply(size_band)
-
-        seg = open_df.groupby("Size Band").agg(
-            open_pipeline=("Amount", "sum"),
-            avg_contacts=("contact_count", "mean"),
-            opps=("Opportunity ID", "nunique")
-        ).reset_index()
-
-        for _, r in seg.iterrows():
-            band = r["Size Band"]
-            band_open_pipeline = r["open_pipeline"]
-            band_avg_contacts = r["avg_contacts"]
-
-            band_enhanced_win_rate = modeled_win_rate_for_open(band_avg_contacts, win_rate, target_contacts)
-            band_incremental = max(0, (band_enhanced_win_rate - win_rate) * band_open_pipeline)
-
-            seg_rows.append({
-                "Segment": band,
-                "Open Pipeline": band_open_pipeline,
-                "Avg Contacts (Open)": band_avg_contacts,
-                "Incremental Won Pipeline": band_incremental
-            })
-
-            segment_rows_for_pdf.append([
-                band,
-                f"${band_open_pipeline:,.0f}",
-                f"{band_avg_contacts:.1f}",
-                f"${band_incremental:,.0f}"
-            ])
-
-        seg_df = pd.DataFrame(seg_rows).sort_values("Open Pipeline", ascending=False)
-
-        st.dataframe(
-            seg_df.style.format({
-                "Open Pipeline": "${:,.0f}",
-                "Avg Contacts (Open)": "{:.1f}",
-                "Incremental Won Pipeline": "${:,.0f}"
-            }),
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.write("Not enough open opportunities to segment.")
-
-    section_end()
-
-    # Executive Summary
-    section_start("Executive Summary")
-    st.caption("Leadership-ready takeaways summarizing coverage patterns, risks, and modeled uplift.")
-
-    bullets = []
-    bullets.append(
-        f"Won opportunities average **{avg_cr_won:.1f}** contact roles vs **{avg_cr_lost:.1f}** on lost deals, showing stronger multi-threading in wins."
-    )
-    if won_zero_count > 0:
-        bullets.append(
-            f"**Red flag:** {won_zero_count:,} Won opportunities (**{won_zero_pct:.1%} of wins**) show **0 contact roles**, indicating a CRM hygiene or tracking gap."
-        )
-    if (avg_cr_open < avg_cr_won) or (avg_cr_open < 2.0):
-        bullets.append(
-            f"Open opportunities average **{avg_cr_open:.1f}** roles. Increasing coverage to at least **{target_contacts:.1f}** roles would align open deals with won patterns."
-        )
-    if avg_days_won and avg_age_open:
-        bullets.append(
-            f"Won opportunities close in ~**{avg_days_won:.0f} days**, while open deals are already ~**{avg_age_open:.0f} days** old — older deals without stakeholder depth are less likely to win."
-        )
-    if user_mapped_any and (mid_cnt > 0 or late_cnt > 0):
-        bullets.append(
-            f"Stage gates show **{mid_below_pct:.0%}** of Mid-stage and **{late_below_pct:.0%}** of Late-stage pipeline below stakeholder targets, creating preventable late-stage risk."
-        )
-    bullets.append(
-        f"Improving open coverage to **{target_contacts:.1f}** roles could lift win rate from **{win_rate:.1%}** → **{enhanced_win_rate:.1%}**, creating **${incremental_won_pipeline:,.0f}** in incremental modeled won pipeline."
-    )
-
-    for b in bullets:
-        st.markdown("- " + b)
-    section_end()
-
+    # -----------------------
     # Insights (Charts)
+    # -----------------------
     section_start("Insights")
     st.caption("Visualizes relationships between contact coverage, win rate, pipeline risk, and velocity.")
 
@@ -937,7 +986,7 @@ if opps_file and roles_file:
         lambda r: r["won"] / r["n"] if r["n"] > 0 else 0,
         axis=1
     )
-    # ✅ Wilson CI
+
     cis = winrate_bucket.apply(lambda r: wilson_ci(r["won"], r["n"]), axis=1)
     winrate_bucket["CI Low"] = [c[0] for c in cis]
     winrate_bucket["CI High"] = [c[1] for c in cis]
@@ -1058,7 +1107,9 @@ if opps_file and roles_file:
 
     section_end()
 
-    # Red flag details section
+    # -----------------------
+    # Red flag detail
+    # -----------------------
     won_zero_rows_for_pdf = []
     if won_zero_count > 0:
         section_start("Red Flag — Won Deals Missing Contact Roles")
@@ -1084,7 +1135,9 @@ if opps_file and roles_file:
             )
         section_end()
 
-    # Owner Rollup — inherits global filter
+    # -----------------------
+    # Owner Rollup
+    # -----------------------
     owner_rollup_rows = []
     if "Opportunity Owner" in opps.columns:
         section_start("Owner Coverage Rollup (Coaching View)")
@@ -1117,7 +1170,9 @@ if opps_file and roles_file:
             st.markdown(f"- **{line}**")
         section_end()
 
-    # Top Open Opps — inherits global filter
+    # -----------------------
+    # Top Open Opps
+    # -----------------------
     section_start("Top Open Opportunities to Fix First")
     st.caption("Prioritize multi-threading these deals based on value, age, and low contact coverage.")
 
@@ -1147,17 +1202,18 @@ if opps_file and roles_file:
         st.write("No open opportunities found.")
     section_end()
 
-    # Build PDF charts (matplotlib)
+    # -----------------------
+    # PDF Charts
+    # -----------------------
     pdf_chart_pngs = []
 
-    # ✅ PDF Win-rate chart with CI band
+    # PDF Win-rate chart with CI band
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
     x = winrate_bucket["Winrate Bucket"].tolist()
     y = winrate_bucket["Win Rate"].tolist()
     lo = winrate_bucket["CI Low"].tolist()
     hi = winrate_bucket["CI High"].tolist()
-
     ax1.plot(x, y, marker="o", label="Win Rate")
     ax1.fill_between(x, lo, hi, alpha=0.2, label="95% CI (Wilson)")
     ax1.set_title("Win Rate vs Contact Roles (1–7+, Won-0 excluded)")
@@ -1257,11 +1313,11 @@ if opps_file and roles_file:
 
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
-        bullets=bullets,
+        bullets=[],
         owner_rollup_rows=owner_rollup_rows,
         top_opps_rows=top_opps_rows,
         chart_pngs=pdf_chart_pngs,
-        segment_rows=segment_rows_for_pdf,
+        segment_rows=[],
         won_zero_rows=won_zero_rows_for_pdf
     )
 
