@@ -122,6 +122,19 @@ def section_end():
 
 
 # -----------------------
+# Wilson confidence interval (95%)
+# -----------------------
+def wilson_ci(k, n, z=1.96):
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    denom = 1 + z**2 / n
+    center = (p + z**2/(2*n)) / denom
+    margin = (z * ((p*(1-p)/n + z**2/(4*n**2))**0.5)) / denom
+    return (max(0.0, center - margin), min(1.0, center + margin))
+
+
+# -----------------------
 # PDF helpers
 # -----------------------
 LOGO_URL = "https://www.revopsglobal.com/wp-content/uploads/2024/09/Footer_Logo.png"
@@ -464,14 +477,11 @@ if opps_file and roles_file:
     if selected_types:
         opps = opps[opps["Type"].isin(selected_types)].copy()
 
-    # ✅ CRITICAL FIX: reset index so masks align
     opps = opps.reset_index(drop=True)
 
-    # Filter roles to only current opp IDs
     filtered_opp_ids = opps["Opportunity ID"].dropna().unique()
     roles = roles[roles["Opportunity ID"].isin(filtered_opp_ids)].copy()
 
-    # Stage series after filtering + aligned to opps index
     stage = opps["Stage"].fillna("").astype(str)
 
     # Stage Mapping
@@ -506,7 +516,6 @@ if opps_file and roles_file:
     user_mapped_any = any([early_stages, mid_stages, late_stages, won_stages, lost_stages])
     section_end()
 
-    # ✅ Build masks as Series indexed to opps.index
     if user_mapped_any:
         won_mask  = pd.Series(stage.isin(won_stages).to_numpy(), index=opps.index)
         lost_mask = pd.Series(stage.isin(lost_stages).to_numpy(), index=opps.index)
@@ -522,12 +531,10 @@ if opps_file and roles_file:
         mid_mask = open_mask.copy()
         late_mask = open_mask.copy()
 
-    # Contact counts per opp
     cr_counts = roles.groupby("Opportunity ID")["Contact ID"].nunique()
     opps = opps.merge(cr_counts.rename("contact_count"), on="Opportunity ID", how="left")
     opps["contact_count"] = pd.to_numeric(opps["contact_count"], errors="coerce").fillna(0)
 
-    # Core KPIs
     total_opps = opps["Opportunity ID"].nunique()
     total_pipeline = opps["Amount"].sum()
 
@@ -892,6 +899,7 @@ if opps_file and roles_file:
     chart_df["contact_count"] = pd.to_numeric(chart_df["contact_count"], errors="coerce").fillna(0)
     chart_df["Amount"] = pd.to_numeric(chart_df["Amount"], errors="coerce").fillna(0)
 
+    # Standard buckets for other charts
     def contact_bucket(n):
         n = float(n) if pd.notna(n) else 0
         if n <= 0: return "0"
@@ -901,27 +909,67 @@ if opps_file and roles_file:
         return "4+"
 
     chart_df["Contact Bucket"] = chart_df["contact_count"].apply(contact_bucket)
-    bucket_order = ["0", "1", "2", "3", "4+"]
 
-    closed_df = chart_df[chart_df["Stage Group"].isin(["Won", "Lost"])]
-    winrate_bucket = closed_df.groupby("Contact Bucket").agg(
+    # Win-rate buckets: 1–6, 7+
+    def contact_bucket_winrate(n):
+        n = float(n) if pd.notna(n) else 0
+        if n <= 0:
+            return None
+        if n >= 7:
+            return "7+"
+        return str(int(n))
+
+    chart_df["Winrate Bucket"] = chart_df["contact_count"].apply(contact_bucket_winrate)
+    win_bucket_order = ["1", "2", "3", "4", "5", "6", "7+"]
+
+    # Exclude WON deals with 0 contacts from win-rate chart
+    closed_df = chart_df[chart_df["Stage Group"].isin(["Won", "Lost"])].copy()
+    closed_df = closed_df[~((closed_df["Stage Group"] == "Won") & (closed_df["contact_count"] == 0))]
+    closed_df = closed_df[closed_df["Winrate Bucket"].notna()]
+
+    winrate_bucket = closed_df.groupby("Winrate Bucket").agg(
         won=("Stage Group", lambda s: (s == "Won").sum()),
         lost=("Stage Group", lambda s: (s == "Lost").sum())
-    ).reset_index()
+    ).reindex(win_bucket_order).fillna(0).reset_index()
+
+    winrate_bucket["n"] = winrate_bucket["won"] + winrate_bucket["lost"]
     winrate_bucket["Win Rate"] = winrate_bucket.apply(
-        lambda r: r["won"] / (r["won"] + r["lost"]) if (r["won"] + r["lost"]) > 0 else 0,
+        lambda r: r["won"] / r["n"] if r["n"] > 0 else 0,
         axis=1
     )
+    # ✅ Wilson CI
+    cis = winrate_bucket.apply(lambda r: wilson_ci(r["won"], r["n"]), axis=1)
+    winrate_bucket["CI Low"] = [c[0] for c in cis]
+    winrate_bucket["CI High"] = [c[1] for c in cis]
 
-    st.caption("Win rate increases as more stakeholders are engaged.")
-    st.altair_chart(
-        alt.Chart(winrate_bucket).mark_line(point=True).encode(
-            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
-            y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%"), title="Win Rate"),
-            tooltip=["Contact Bucket", alt.Tooltip("Win Rate:Q", format=".1%"), "won", "lost"]
-        ).properties(height=260),
-        use_container_width=True
+    st.caption("Win rate increases as more stakeholders are engaged (with 95% confidence bands).")
+
+    band = alt.Chart(winrate_bucket).mark_area(opacity=0.18).encode(
+        x=alt.X("Winrate Bucket:N", sort=win_bucket_order, title="Contact Roles per Opportunity (bucketed)"),
+        y=alt.Y("CI Low:Q", axis=alt.Axis(format="%"), title="Win Rate"),
+        y2="CI High:Q",
+        tooltip=[
+            "Winrate Bucket",
+            alt.Tooltip("Win Rate:Q", format=".1%"),
+            alt.Tooltip("CI Low:Q", format=".1%"),
+            alt.Tooltip("CI High:Q", format=".1%"),
+            "won", "lost", "n"
+        ]
     )
+
+    line = alt.Chart(winrate_bucket).mark_line(point=True).encode(
+        x=alt.X("Winrate Bucket:N", sort=win_bucket_order),
+        y=alt.Y("Win Rate:Q"),
+        tooltip=[
+            "Winrate Bucket",
+            alt.Tooltip("Win Rate:Q", format=".1%"),
+            alt.Tooltip("CI Low:Q", format=".1%"),
+            alt.Tooltip("CI High:Q", format=".1%"),
+            "won", "lost", "n"
+        ]
+    )
+
+    st.altair_chart((band + line).properties(height=260), use_container_width=True)
 
     open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
     open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
@@ -947,16 +995,18 @@ if opps_file and roles_file:
     open_mask_local = (time_df["Stage Group"] == "Open") & time_df["Created Date"].notna()
     time_df.loc[open_mask_local, "open_age_days"] = (today - time_df.loc[open_mask_local, "Created Date"]).dt.days
 
+    bucket_order_std = ["0", "1", "2", "3", "4+"]
+
     agg_rows = []
     for sg in ["Won", "Lost"]:
         tmp = time_df[time_df["Stage Group"] == sg]
-        grp = tmp.groupby("Contact Bucket")["days_to_close"].mean().reindex(bucket_order).reset_index()
+        grp = tmp.groupby("Contact Bucket")["days_to_close"].mean().reindex(bucket_order_std).reset_index()
         grp["Stage Group"] = sg
         grp = grp.rename(columns={"days_to_close": "Avg Days"})
         agg_rows.append(grp)
 
     tmp_open = time_df[time_df["Stage Group"] == "Open"]
-    grp_open = tmp_open.groupby("Contact Bucket")["open_age_days"].mean().reindex(bucket_order).reset_index()
+    grp_open = tmp_open.groupby("Contact Bucket")["open_age_days"].mean().reindex(bucket_order_std).reset_index()
     grp_open["Stage Group"] = "Open"
     grp_open = grp_open.rename(columns={"open_age_days": "Avg Days"})
     agg_rows.append(grp_open)
@@ -966,7 +1016,7 @@ if opps_file and roles_file:
     st.caption("More contact roles correlate with faster closes and younger open pipeline.")
     st.altair_chart(
         alt.Chart(avg_days_bucket).mark_bar().encode(
-            x=alt.X("Contact Bucket:N", sort=bucket_order, title="Contact Roles per Opportunity (bucketed)"),
+            x=alt.X("Contact Bucket:N", sort=bucket_order_std, title="Contact Roles per Opportunity (bucketed)"),
             y=alt.Y("Avg Days:Q", title="Avg Days (Close for Won/Lost, Age for Open)"),
             color=alt.Color("Stage Group:N", title="Outcome"),
             tooltip=["Stage Group", "Contact Bucket", alt.Tooltip("Avg Days:Q", format=",.0f")]
@@ -1072,7 +1122,6 @@ if opps_file and roles_file:
     st.caption("Prioritize multi-threading these deals based on value, age, and low contact coverage.")
 
     top_opps_rows = []
-    open_df = open_opps.copy()
     if not open_df.empty:
         tmp = open_df.copy()
         tmp["age_days"] = (today - tmp["Created Date"]).dt.days
@@ -1098,16 +1147,24 @@ if opps_file and roles_file:
         st.write("No open opportunities found.")
     section_end()
 
-    # Build PDF charts
+    # Build PDF charts (matplotlib)
     pdf_chart_pngs = []
 
+    # ✅ PDF Win-rate chart with CI band
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
-    ax1.plot(winrate_bucket["Contact Bucket"], winrate_bucket["Win Rate"], marker="o")
-    ax1.set_title("Win Rate vs Contact Roles (bucketed)")
+    x = winrate_bucket["Winrate Bucket"].tolist()
+    y = winrate_bucket["Win Rate"].tolist()
+    lo = winrate_bucket["CI Low"].tolist()
+    hi = winrate_bucket["CI High"].tolist()
+
+    ax1.plot(x, y, marker="o", label="Win Rate")
+    ax1.fill_between(x, lo, hi, alpha=0.2, label="95% CI (Wilson)")
+    ax1.set_title("Win Rate vs Contact Roles (1–7+, Won-0 excluded)")
     ax1.set_xlabel("Contact Roles per Opportunity")
     ax1.set_ylabel("Win Rate")
     ax1.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax1.legend()
     pdf_chart_pngs.append(fig_to_png_bytes(fig1))
 
     fig2 = plt.figure(figsize=(7.2, 3.2))
