@@ -298,20 +298,6 @@ def build_pdf_report(
         if i in (2, 4):
             story.append(PageBreak())
 
-    if segment_rows:
-        story.append(Paragraph("Segment Uplift (Deal Size Bands)", styles["H2"]))
-        seg_table = [["Segment", "Open Pipeline", "Avg Contacts (Open)", "Incremental Won Pipeline (modeled)"]] + segment_rows
-        t2 = Table(seg_table, colWidths=[1.4*inch, 1.8*inch, 1.6*inch, 1.9*inch])
-        t2.setStyle(TableStyle([
-            ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F1F5F9")),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-            ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
-            ("ALIGN", (1,1), (-1,-1), "RIGHT"),
-            ("FONTSIZE", (0,0), (-1,-1), 9.8),
-        ]))
-        story.append(t2)
-        story.append(Spacer(1, 0.12*inch))
-
     story.append(Paragraph("Owner Coverage Rollup (Coaching View)", styles["H2"]))
     story.append(Paragraph(
         "Coach owners with the highest under-covered open pipeline first.",
@@ -463,9 +449,11 @@ Do NOT:
         """
     )
 
-# Uploaders
+# Uploaders + small divider line between them (your request)
 st.markdown(f"**Upload Opportunities CSV**  \n[Download sample]({sample_opps_url})")
 opps_file = st.file_uploader("", type=["csv"], key="opps")
+
+st.markdown("<hr style='margin:6px 0 10px 0;border:0;border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
 
 st.markdown(f"**Upload Opportunities with Contact Roles CSV**  \n[Download sample]({sample_roles_url})")
 roles_file = st.file_uploader("", type=["csv"], key="roles")
@@ -645,7 +633,7 @@ if opps_file and roles_file:
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
     # =========================
-    # SENIORITY MATRIX (FIXED)
+    # SENIORITY MATRIX (WITH STAGE FILTER + 1 DECIMAL)
     # =========================
     roles_for_matrix = roles.copy()
     if "Title" not in roles_for_matrix.columns:
@@ -678,6 +666,14 @@ if opps_file and roles_file:
     section_start("Seniority / Job-Level Coverage by Stage")
     st.caption("Buckets Contact Role titles into seniority levels and shows buying-group coverage by deal stage.")
 
+    # ✅ NEW: Stage filter above chart
+    selected_stage_buckets = st.multiselect(
+        "Filter Stage Buckets to display",
+        options=stage_order,
+        default=stage_order
+    )
+    selected_stage_buckets = selected_stage_buckets or stage_order  # fallback if user clears all
+
     matrix_view = st.radio(
         "Matrix View",
         ["# Unique Contact Roles", "Avg Contact Roles per Opportunity"],
@@ -697,8 +693,16 @@ if opps_file and roles_file:
             base_pivot[col] = 0
     base_pivot = base_pivot[seniority_order]
 
+    # ✅ apply stage filter
+    base_pivot = base_pivot.loc[base_pivot.index.isin(selected_stage_buckets)]
+
     if matrix_view == "# Unique Contact Roles":
-        st.dataframe(base_pivot.style.background_gradient(axis=None), use_container_width=True)
+        # ✅ show 1 decimal
+        base_pivot_f = base_pivot.astype(float)
+        st.dataframe(
+            base_pivot_f.style.format("{:.1f}").background_gradient(axis=None),
+            use_container_width=True
+        )
     else:
         opp_stage_counts = opps.copy()
         opp_stage_counts["Stage Bucket"] = opp_stage_counts["Opportunity ID"].apply(stage_bucket_for_id)
@@ -721,6 +725,9 @@ if opps_file and roles_file:
     )
     stacked_df["Stage Bucket"] = pd.Categorical(stacked_df["Stage Bucket"], categories=stage_order, ordered=True)
     stacked_df["Seniority Bucket"] = pd.Categorical(stacked_df["Seniority Bucket"], categories=seniority_order, ordered=True)
+
+    # ✅ filter stacked chart too
+    stacked_df = stacked_df[stacked_df["Stage Bucket"].isin(selected_stage_buckets)]
 
     st.caption("Stacked view of seniority coverage per stage.")
     st.altair_chart(
@@ -1217,8 +1224,8 @@ if opps_file and roles_file:
     st.caption("Prioritize multi-threading these deals based on value, age, and low contact coverage.")
 
     top_opps_rows = []
-    if not open_df.empty:
-        tmp = open_df.copy()
+    if not open_opps.empty:
+        tmp = open_opps.copy()
         tmp["age_days"] = (today - tmp["Created Date"]).dt.days
         tmp["age_days"] = pd.to_numeric(tmp["age_days"], errors="coerce").fillna(0)
 
@@ -1250,10 +1257,12 @@ if opps_file and roles_file:
     # (1) Win-rate chart
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
+
     x = winrate_bucket["Winrate Bucket"].tolist()
     y = winrate_bucket["Win Rate"].tolist()
     lo = winrate_bucket["CI Low"].tolist()
     hi = winrate_bucket["CI High"].tolist()
+
     ax1.plot(x, y, marker="o", label="Win Rate")
     ax1.fill_between(x, lo, hi, alpha=0.2, label="95% CI (Wilson)")
     ax1.set_title("Win Rate vs Contact Roles (1–7+, Won-0 excluded)")
@@ -1288,7 +1297,7 @@ if opps_file and roles_file:
     # (4) Uplift chart
     fig4 = plt.figure(figsize=(6.5, 3.0))
     ax4 = fig4.add_subplot(111)
-    ax4.bar(impact_df["Scenario"], impact_df["Win Rate"])
+    ax4.bar(["Current", "Enhanced"], [win_rate, enhanced_win_rate])
     ax4.set_title("Modeled Win Rate Uplift")
     ax4.set_ylabel("Win Rate")
     ax4.yaxis.set_major_formatter(PercentFormatter(1.0))
