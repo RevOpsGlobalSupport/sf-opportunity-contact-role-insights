@@ -103,6 +103,16 @@ def clean_id_series(s: pd.Series) -> pd.Series:
     return s
 
 
+def fmt_money(x):
+    try:
+        if pd.isna(x):
+            return "$0"
+        x = float(x)
+        return f"${x:,.0f}"
+    except Exception:
+        return "$0"
+
+
 def label_with_tooltip(label: str, tooltip: str):
     safe_tip = html.escape(tooltip)
     st.markdown(
@@ -334,7 +344,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
+st.markdown("<hr style='margin: 8px 0 16px 0; border:0; border-top:1px solid #e5e7eb;' />",
+            unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -434,7 +445,8 @@ Do NOT:
 # CSV Uploads
 st.markdown(f"**Upload Opportunities CSV**  \n[Download sample]({sample_opps_url})")
 opps_file = st.file_uploader("", type=["csv"], key="opps")
-st.markdown("<hr style='margin:6px 0 10px 0;border:0;border-top:1px solid #e5e7eb;' />", unsafe_allow_html=True)
+st.markdown("<hr style='margin:6px 0 10px 0;border:0;border-top:1px solid #e5e7eb;' />",
+            unsafe_allow_html=True)
 st.markdown(f"**Upload Opportunities with Contact Roles CSV**  \n[Download sample]({sample_roles_url})")
 roles_file = st.file_uploader("", type=["csv"], key="roles")
 
@@ -669,7 +681,7 @@ if opps_file and roles_file:
     risk_pct = open_opps_risk / open_opps_total if open_opps_total > 0 else 0
     if open_pipeline_risk > 0:
         bullets.append(
-            f"**${open_pipeline_risk:,.0f}** of open pipeline is under-covered (0–1 roles), representing **{risk_pct:.0%}** of open opportunities."
+            f"**{fmt_money(open_pipeline_risk)}** of open pipeline is under-covered (0–1 roles), representing **{risk_pct:.0%}** of open opportunities."
         )
     if won_zero_count > 0:
         bullets.append(
@@ -694,7 +706,7 @@ if opps_file and roles_file:
         label_with_tooltip("Total Opportunities", "Unique opportunities in the export.")
         show_value(f"{total_opps:,}")
         label_with_tooltip("Total Pipeline", "Sum of Amount for all opportunities.")
-        show_value(f"${total_pipeline:,.0f}")
+        show_value(fmt_money(total_pipeline))
         label_with_tooltip("Current Win Rate", "Won ÷ (Won + Lost).")
         show_value(f"{win_rate:.1%}")
         label_with_tooltip("Opportunities with Contact Roles", "Unique opportunities appearing in Contact Roles export.")
@@ -702,13 +714,13 @@ if opps_file and roles_file:
         label_with_tooltip("Opportunities without Contact Roles", "Total opps minus those with roles.")
         show_value(f"{opps_without_cr:,}")
         label_with_tooltip("Pipeline with Contact Roles", "Amount on opps with ≥1 role.")
-        show_value(f"${pipeline_with_cr:,.0f}")
+        show_value(fmt_money(pipeline_with_cr))
         label_with_tooltip("Pipeline without Contact Roles", "Amount on opps with 0 roles.")
-        show_value(f"${pipeline_without_cr:,.0f}")
+        show_value(fmt_money(pipeline_without_cr))
         label_with_tooltip("Opps with only 1 Contact Role", "Opps where role count = 1.")
         show_value(f"{opps_one_cr:,}")
         label_with_tooltip("Pipeline with only 1 Contact Role", "Amount on opps with exactly 1 role.")
-        show_value(f"${pipeline_one_cr:,.0f}")
+        show_value(fmt_money(pipeline_one_cr))
 
     with c_right:
         label_with_tooltip("Avg Contact Roles – Won", "Average roles per Won opportunity.")
@@ -719,7 +731,7 @@ if opps_file and roles_file:
         show_value(f"{avg_cr_open:.1f}")
         if won_zero_count > 0:
             label_with_tooltip("Won Opps with 0 Contact Roles", "Won opportunities missing buying-group contacts.")
-            show_value(f"{won_zero_count:,} ({won_zero_pct:.1%} of Won) — ${won_zero_pipeline:,.0f}")
+            show_value(f"{won_zero_count:,} ({won_zero_pct:.1%} of Won) — {fmt_money(won_zero_pipeline)}")
         label_with_tooltip("Avg days to close – Won", "Close Date − Created Date for Won opps.")
         show_value(f"{avg_days_won:.0f} days" if avg_days_won else "0 days")
         label_with_tooltip("Avg days to close – Lost", "Close Date − Created Date for Lost opps.")
@@ -738,7 +750,7 @@ if opps_file and roles_file:
         "This is your near-term exposure if coverage doesn’t improve."
     )
     label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opps with 0–1 contact roles.")
-    show_value(f"${open_pipeline_risk:,.0f}")
+    show_value(fmt_money(open_pipeline_risk))
     label_with_tooltip("% of Open Opps Missing Contacts", "Open opps with 0–1 roles ÷ total open opps.")
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
     pct_open_pipe_risk = (open_pipeline_risk / open_pipeline) if open_pipeline > 0 else 0
@@ -771,7 +783,7 @@ if opps_file and roles_file:
         "Expected Won Pipeline (Open) — Current",
         "Open pipeline × current win rate."
     )
-    show_value(f"${current_expected_wins:,.0f}")
+    show_value(fmt_money(current_expected_wins))
 
     st.markdown("**Modeled Uplift (if Open coverage improves):**")
     delta_contacts = target_contacts - avg_cr_open
@@ -786,11 +798,14 @@ if opps_file and roles_file:
 
     pct_pipe = (incremental_won_pipeline / current_expected_wins) if current_expected_wins > 0 else 0
     label_with_tooltip("Enhanced Expected Won Pipeline (Open)", "Expected won pipeline at modeled win rate.")
-    show_value(f"${enhanced_expected_wins:,.0f} vs Current ${current_expected_wins:,.0f} (${incremental_won_pipeline:+,.0f}, {pct_pipe:+.0%})")
+    show_value(
+        f"{fmt_money(enhanced_expected_wins)} vs Current {fmt_money(current_expected_wins)} "
+        f"({fmt_money(incremental_won_pipeline)} uplift, {pct_pipe:+.0%})"
+    )
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — EXPANDERS + TABLE (FIXED)
+    # Owner Coverage Rollup (Coaching View) — title FIX (NO PIPELINE TEXT IN TITLE)
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -799,12 +814,9 @@ if opps_file and roles_file:
     )
 
     owner_df = open_df.copy()
-
-    # clean owner names
     owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("").astype(str).str.strip()
     owner_df = owner_df[owner_df["Opportunity Owner"] != ""].copy()
 
-    # flags
     owner_df["is_undercovered"] = (owner_df["contact_count"] <= 1).astype(int)
     owner_df["undercovered_amount"] = owner_df["Amount"].where(owner_df["contact_count"] <= 1, 0)
 
@@ -815,7 +827,6 @@ if opps_file and roles_file:
         undercovered_pipeline=("undercovered_amount", "sum")
     ).reset_index()
 
-    # pct + sort
     owner_roll["pct_undercovered"] = owner_roll.apply(
         lambda r: r["opps_undercovered"] / r["open_opps"] if r["open_opps"] > 0 else 0,
         axis=1
@@ -825,7 +836,6 @@ if opps_file and roles_file:
     if owner_roll.empty:
         st.markdown("No open opportunities found for the selected filters.")
     else:
-        # rank stages so reps see late-stage first
         stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
         owner_df["Stage Bucket"] = owner_df["Opportunity ID"].apply(stage_bucket_for_id)
         owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
@@ -834,7 +844,7 @@ if opps_file and roles_file:
         for _, r in owner_roll.iterrows():
             open_opps_n = int(r["open_opps"])
             if open_opps_n == 0:
-                continue  # skip any empty owners
+                continue
 
             owner_name = r["Opportunity Owner"]
             under_n = int(r["opps_undercovered"])
@@ -842,14 +852,15 @@ if opps_file and roles_file:
             open_pipe = float(r["open_pipeline"])
             under_pipe = float(r["undercovered_pipeline"])
 
-            # CLEAN plain-text label (no markdown / HTML)
-            exp_title = (
-                f"{owner_name} — {pct_under:.0%} of open opps under-covered "
-                f"({under_n}/{open_opps_n}); "
-                f"pipeline at risk ${under_pipe:,.0f} of ${open_pipe:,.0f}"
-            )
+            # Short title only — NO pipeline words here
+            exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
 
             with st.expander(exp_title, expanded=False):
+                # Clean, readable pipeline line inside body
+                st.markdown(
+                    f"**Pipeline at risk:** {fmt_money(under_pipe)} out of {fmt_money(open_pipe)} open pipeline."
+                )
+
                 rep_under = owner_df[
                     (owner_df["Opportunity Owner"] == owner_name) &
                     (owner_df["contact_count"] <= 1)
@@ -874,7 +885,6 @@ if opps_file and roles_file:
                     rep_table = rep_under[display_cols].rename(columns={
                         "contact_count": "# Contact Roles"
                     })
-
                     rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
                     rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
 
@@ -1198,14 +1208,14 @@ if opps_file and roles_file:
     metrics_dict = {
         "Current Opportunity Insights": [
             ["Total Opportunities", f"{total_opps:,}"],
-            ["Total Pipeline", f"${total_pipeline:,.0f}"],
+            ["Total Pipeline", fmt_money(total_pipeline)],
             ["Current Win Rate", f"{win_rate:.1%}"],
             ["Opps with Contact Roles", f"{opps_with_cr:,}"],
             ["Opps without Contact Roles", f"{opps_without_cr:,}"],
-            ["Pipeline with Contact Roles", f"${pipeline_with_cr:,.0f}"],
-            ["Pipeline without Contact Roles", f"${pipeline_without_cr:,.0f}"],
+            ["Pipeline with Contact Roles", fmt_money(pipeline_with_cr)],
+            ["Pipeline without Contact Roles", fmt_money(pipeline_without_cr)],
             ["Opps with only 1 Contact Role", f"{opps_one_cr:,}"],
-            ["Pipeline with only 1 Contact Role", f"${pipeline_one_cr:,.0f}"],
+            ["Pipeline with only 1 Contact Role", fmt_money(pipeline_one_cr)],
             ["Avg Contact Roles – Won", f"{avg_cr_won:.1f}"],
             ["Avg Contact Roles – Lost", f"{avg_cr_lost:.1f}"],
             ["Avg Contact Roles – Open", f"{avg_cr_open:.1f}"],
@@ -1218,16 +1228,16 @@ if opps_file and roles_file:
             ["Coverage Score", f"{score:.0f} / 100 — {score_label}"],
         ],
         "Pipeline at Risk": [
-            ["Open Pipeline at Risk (0–1 roles)", f"${open_pipeline_risk:,.0f}"],
+            ["Open Pipeline at Risk (0–1 roles)", fmt_money(open_pipeline_risk)],
             ["% Open Opps Missing Contacts", f"{risk_pct:.1%}"],
             ["% Open Pipeline at Risk", f"{pct_open_pipe_risk:.1%}"],
         ],
         "Simulator": [
-            ["Expected Won Pipeline (Open) — Current", f"${current_expected_wins:,.0f}"],
+            ["Expected Won Pipeline (Open) — Current", fmt_money(current_expected_wins)],
             ["Target Avg Contacts (Open)", f"{target_contacts:.1f} vs {avg_cr_open:.1f}"],
             ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%} vs {win_rate:.1%}"],
-            ["Enhanced Expected Won Pipeline (Open)", f"${enhanced_expected_wins:,.0f} vs ${current_expected_wins:,.0f}"],
-            ["Incremental Won Pipeline (modeled)", f"${incremental_won_pipeline:,.0f}"],
+            ["Enhanced Expected Won Pipeline (Open)", f"{fmt_money(enhanced_expected_wins)} vs {fmt_money(current_expected_wins)}"],
+            ["Incremental Won Pipeline (modeled)", fmt_money(incremental_won_pipeline)],
         ],
     }
 
@@ -1235,7 +1245,7 @@ if opps_file and roles_file:
     owner_bullets_plain = [
         f"{row['Opportunity Owner']} owns {int(row['open_opps'])} open opps; "
         f"{row['pct_undercovered']:.0%} under-covered; "
-        f"pipeline at risk ${row['undercovered_pipeline']:,.0f} of ${row['open_pipeline']:,.0f}"
+        f"pipeline at risk {fmt_money(row['undercovered_pipeline'])} out of {fmt_money(row['open_pipeline'])}"
         for _, row in owner_roll.head(12).iterrows()
     ]
 
@@ -1245,7 +1255,7 @@ if opps_file and roles_file:
         chart_pngs=pdf_chart_pngs,
         won_zero_rows=won_zero_rows_for_pdf,
         owner_bullets=owner_bullets_plain,
-        priority_bullets=priority_bullets[:12]
+        priority_bullets=priority_bullets[:12] if 'priority_bullets' in locals() else []
     )
 
     st.download_button(
