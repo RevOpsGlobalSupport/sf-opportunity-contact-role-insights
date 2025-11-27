@@ -255,7 +255,7 @@ def build_pdf_report(
         t.setStyle(TableStyle([
             ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#F1F5F9")),
             ("TEXTCOLOR", (0,0), (-1,0), colors.HexColor("#0F172A")),
-            ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+            ("FONTNAME", (0,0), (-1,-1), "Helvetica-Bold"),
             ("GRID", (0,0), (-1,-1), 0.5, colors.HexColor("#E2E8F0")),
             ("ALIGN", (1,1), (1,-1), "RIGHT"),
             ("FONTSIZE", (0,0), (-1,-1), 10),
@@ -738,16 +738,23 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Pipeline Risk
+    # Pipeline at Risk (Option A)
     # ======================================================
-    section_start("Pipeline Risk")
-    st.caption("How much open pipeline is under-covered today (0–1 roles).")
+    section_start("Pipeline at Risk (Low Buying-Group Coverage)")
+    st.caption(
+        "Open deals with **0–1 contact roles** consistently behave more like Lost deals. "
+        "This is your near-term exposure if coverage doesn’t improve."
+    )
 
     label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opps with 0–1 contact roles.")
     show_value(f"${open_pipeline_risk:,.0f}")
 
     label_with_tooltip("% of Open Opps Under-Covered", "Open opps with 0–1 roles ÷ total open opps.")
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
+
+    pct_open_pipe_risk = (open_pipeline_risk / open_pipeline) if open_pipeline > 0 else 0
+    label_with_tooltip("% of Open Pipeline at Risk", "Under-covered open pipeline ÷ total open pipeline.")
+    show_value(f"{pct_open_pipe_risk:.1%}")
 
     section_end()
 
@@ -893,7 +900,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Simulator with comparisons + deltas
+    # Simulator (Option C minimal + uplift)
     # ======================================================
     def modeled_win_rate_for_open(avg_open_contacts, base_win_rate, target_contacts):
         cur = max(avg_open_contacts, 1e-6)
@@ -903,7 +910,7 @@ if opps_file and roles_file:
     section_start("Simulator — Target Contact Coverage")
     st.caption(
         "Model how improving buying-group coverage on open deals could change outcomes. "
-        "Pick a target average contact count and review modeled upside and risk-weighted forecast."
+        "Pick a target average contact count and see modeled win rate uplift and incremental won pipeline."
     )
 
     target_contacts = st.slider("Target avg contacts on Open Opportunities", 0.0, 5.0, 2.0, 0.5)
@@ -913,6 +920,14 @@ if opps_file and roles_file:
     current_expected_wins = win_rate * open_pipeline
     enhanced_expected_wins = enhanced_win_rate * open_pipeline
     incremental_won_pipeline = max(0, enhanced_expected_wins - current_expected_wins)
+
+    # Option C minimal
+    st.markdown("**Status-quo outlook (if nothing changes):**")
+    label_with_tooltip(
+        "Expected Won Pipeline (Open) — Current",
+        "Open pipeline × current win rate. This is what open deals are expected to convert at today’s coverage."
+    )
+    show_value(f"${current_expected_wins:,.0f}")
 
     st.markdown("**Modeled Uplift (if Open coverage improves):**")
 
@@ -946,81 +961,6 @@ if opps_file and roles_file:
     show_value(
         f"${enhanced_expected_wins:,.0f} vs Current ${current_expected_wins:,.0f} "
         f"(${incremental_won_pipeline:+,.0f}, {pct_pipe:+.0%})"
-    )
-
-    # ---- Coverage-adjusted forecast with comparisons + deltas ----
-    st.markdown("**Coverage-Adjusted Forecast (risk-weighted today):**")
-
-    st.markdown(
-        """
-<div class="small-help">
-This view estimates what your open pipeline is *actually* worth today after accounting for buying-group risk.  
-Deals with fewer contacts are less likely to convert, so we apply a simple risk discount:
-- **0 roles → heavier discount**
-- **1 role → moderate discount**
-- **2+ roles → no discount**
-</div>
-<div class="help-bullets">
-<b>How to interpret:</b><br>
-• If Coverage-Adjusted Win Rate is much lower than Current Win Rate, your open pipeline is over-optimistic due to weak coverage.<br>
-• The Expected Won Pipeline (Adjusted) is a conservative “what we should expect to close” number today.<br>
-• Coverage Risk Gap shows the dollar exposure caused by low stakeholder depth. Closing that gap = easiest upside.
-</div>
-        """,
-        unsafe_allow_html=True
-    )
-
-    def weight_for_contacts(n):
-        if n <= 0: return 0.6
-        if n == 1: return 0.8
-        return 1.0
-
-    open_df["coverage_weight"] = open_df["contact_count"].apply(weight_for_contacts)
-    open_df["expected_win_rate_adj"] = win_rate * open_df["coverage_weight"]
-    expected_open_wins_adj = (open_df["expected_win_rate_adj"] * open_df["Amount"]).sum()
-
-    coverage_adj_win_rate = expected_open_wins_adj / open_pipeline if open_pipeline > 0 else 0
-    forecast_gap = max(0, current_expected_wins - expected_open_wins_adj)
-
-    # 1) Adjusted win rate vs current win rate
-    delta_adj_wr_pp = (coverage_adj_win_rate - win_rate) * 100
-    pct_adj_wr = ((coverage_adj_win_rate - win_rate) / win_rate) if win_rate > 0 else 0
-
-    st.markdown("<div class='small-help'><b>Adjusted Win Rate:</b> Current win rate discounted by contact depth across open deals.</div>", unsafe_allow_html=True)
-    label_with_tooltip(
-        "Coverage-Adjusted Win Rate (Open)",
-        "Open win rate discounted for low-contact deals to reflect risk."
-    )
-    show_value(
-        f"{coverage_adj_win_rate:.1%} vs Current {win_rate:.1%} "
-        f"({delta_adj_wr_pp:+.1f} pp, {pct_adj_wr:+.0%})"
-    )
-
-    # 2) Adjusted expected wins vs current expected wins
-    delta_adj_pipe = expected_open_wins_adj - current_expected_wins
-    pct_adj_pipe = (delta_adj_pipe / current_expected_wins) if current_expected_wins > 0 else 0
-
-    st.markdown("<div class='small-help'><b>Adjusted Expected Wins:</b> Sum of (Amount × adjusted win rate) across open deals.</div>", unsafe_allow_html=True)
-    label_with_tooltip(
-        "Coverage-Adjusted Expected Won Pipeline (Open)",
-        "Risk-weighted expected won pipeline on open deals."
-    )
-    show_value(
-        f"${expected_open_wins_adj:,.0f} vs Current ${current_expected_wins:,.0f} "
-        f"(${delta_adj_pipe:+,.0f}, {pct_adj_pipe:+.0%})"
-    )
-
-    # 3) Risk gap vs current expected wins
-    gap_pct_of_current = (forecast_gap / current_expected_wins) if current_expected_wins > 0 else 0
-
-    st.markdown("<div class='small-help'><b>Risk Gap:</b> Dollar difference between naïve forecast and risk-weighted forecast.</div>", unsafe_allow_html=True)
-    label_with_tooltip(
-        "Coverage Risk Gap",
-        "Difference between naïve expected wins and risk-weighted expected wins."
-    )
-    show_value(
-        f"${forecast_gap:,.0f} exposure "
-        f"({gap_pct_of_current:.0%} of Current Expected Won Pipeline)"
     )
 
     section_end()
@@ -1171,7 +1111,7 @@ Deals with fewer contacts are less likely to convert, so we apply a simple risk 
     section_end()
 
     # ======================================================
-    # PDF charts creation (same as before)
+    # PDF charts creation
     # ======================================================
     pdf_chart_pngs = []
     fig1 = plt.figure(figsize=(7.2, 3.2))
@@ -1253,9 +1193,10 @@ Deals with fewer contacts are less likely to convert, so we apply a simple risk 
         "Buying Group Coverage Score": [
             ["Coverage Score", f"{score:.0f} / 100 — {score_label}"],
         ],
-        "Pipeline Risk": [
-            ["Open Pipeline at Risk", f"${open_pipeline_risk:,.0f}"],
+        "Pipeline at Risk (Low Buying-Group Coverage)": [
+            ["Open Pipeline at Risk (0–1 roles)", f"${open_pipeline_risk:,.0f}"],
             ["% Open Opps Under-Covered", f"{risk_pct:.1%}"],
+            ["% Open Pipeline at Risk", f"{pct_open_pipe_risk:.1%}"],
         ],
         "Stage Coverage Gates": [
             ["Mid-stage opps below Gate 1", f"{mid_below_pct:.1%} ({mid_below_cnt:,} of {mid_cnt:,})"],
@@ -1264,13 +1205,11 @@ Deals with fewer contacts are less likely to convert, so we apply a simple risk 
             ["Late-stage pipeline below Gate 2", f"${late_below_pipe:,.0f}"],
         ],
         "Simulator": [
+            ["Expected Won Pipeline (Open) — Current", f"${current_expected_wins:,.0f}"],
             ["Target Avg Contacts (Open)", f"{target_contacts:.1f} vs {avg_cr_open:.1f}"],
             ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%} vs {win_rate:.1%}"],
             ["Enhanced Expected Won Pipeline (Open)", f"${enhanced_expected_wins:,.0f} vs ${current_expected_wins:,.0f}"],
             ["Incremental Won Pipeline (modeled)", f"${incremental_won_pipeline:,.0f}"],
-            ["Coverage-Adjusted Win Rate (Open)", f"{coverage_adj_win_rate:.1%}"],
-            ["Coverage-Adjusted Expected Won Pipeline (Open)", f"${expected_open_wins_adj:,.0f}"],
-            ["Coverage Risk Gap", f"${forecast_gap:,.0f}"],
         ],
     }
 
