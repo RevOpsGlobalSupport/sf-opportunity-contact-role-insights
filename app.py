@@ -606,6 +606,23 @@ if opps_file and roles_file:
         open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
 
+    # Stage bucket helper
+    stage_lookup = opps.set_index("Opportunity ID")["Stage"].to_dict()
+
+    def stage_bucket_for_id(opp_id):
+        s = stage_lookup.get(opp_id, "")
+        if user_mapped_any:
+            if s in won_stages: return "Won"
+            if s in lost_stages: return "Lost"
+            if s in late_stages: return "Late"
+            if s in mid_stages: return "Mid"
+            if s in early_stages: return "Early"
+            return "Open"
+        sl = str(s).lower()
+        if "won" in sl: return "Won"
+        if "lost" in sl: return "Lost"
+        return "Open"
+
     # ======================================================
     # Buying Group Coverage Score
     # ======================================================
@@ -773,198 +790,96 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Seniority / Job-Level Coverage by Stage Bucket
-    # ======================================================
-    roles_for_matrix = roles.copy()
-    if "Title" not in roles_for_matrix.columns:
-        roles_for_matrix["Title"] = ""
-    roles_for_matrix["Title"] = roles_for_matrix["Title"].fillna("").astype(str)
-    roles_for_matrix["Seniority Bucket"] = roles_for_matrix["Title"].apply(bucket_seniority)
-
-    stage_lookup = opps.set_index("Opportunity ID")["Stage"].to_dict()
-
-    def stage_bucket_for_id(opp_id):
-        s = stage_lookup.get(opp_id, "")
-        if user_mapped_any:
-            if s in won_stages: return "Won"
-            if s in lost_stages: return "Lost"
-            if s in late_stages: return "Late"
-            if s in mid_stages: return "Mid"
-            if s in early_stages: return "Early"
-            return "Open"
-        sl = str(s).lower()
-        if "won" in sl: return "Won"
-        if "lost" in sl: return "Lost"
-        return "Open"
-
-    roles_for_matrix["Stage Bucket"] = roles_for_matrix["Opportunity ID"].apply(stage_bucket_for_id)
-
-    stage_order = ["Early", "Mid", "Late", "Open", "Won", "Lost"]
-    seniority_order = ["C-Level", "EVP / SVP", "VP", "Director / Head", "Manager", "IC / Staff", "Other / Unknown"]
-
-    section_start("Seniority / Job-Level Coverage by Stage Bucket")
-    st.caption("Shows whether deals are multi-threaded at the right seniority levels by stage bucket.")
-
-    selected_stage_buckets = st.multiselect(
-        "Filter Stage Buckets to display",
-        options=stage_order,
-        default=stage_order
-    ) or stage_order
-
-    matrix_view = st.radio(
-        "Matrix View",
-        ["# Unique Contact Roles", "Avg Contact Roles per Opportunity"],
-        horizontal=True
-    )
-
-    base_pivot = roles_for_matrix.pivot_table(
-        index="Stage Bucket",
-        columns="Seniority Bucket",
-        values="Contact ID",
-        aggfunc="nunique",
-        fill_value=0
-    ).reindex(stage_order).fillna(0)
-
-    for col in seniority_order:
-        if col not in base_pivot.columns:
-            base_pivot[col] = 0
-    base_pivot = base_pivot[seniority_order]
-    base_pivot = base_pivot.loc[base_pivot.index.isin(selected_stage_buckets)]
-
-    if matrix_view == "# Unique Contact Roles":
-        st.dataframe(
-            base_pivot.astype(float).style.format("{:.1f}").background_gradient(axis=None),
-            use_container_width=True
-        )
-    else:
-        opp_stage_counts = opps.copy()
-        opp_stage_counts["Stage Bucket"] = opp_stage_counts["Opportunity ID"].apply(stage_bucket_for_id)
-        opps_per_stage = opp_stage_counts.groupby("Stage Bucket")["Opportunity ID"].nunique()
-
-        avg_pivot = base_pivot.copy()
-        for r in avg_pivot.index:
-            denom = opps_per_stage.get(r, 0)
-            avg_pivot.loc[r] = (avg_pivot.loc[r] / denom) if denom > 0 else 0
-
-        st.dataframe(
-            avg_pivot.style.format("{:.2f}").background_gradient(axis=None),
-            use_container_width=True
-        )
-
-    stacked_df = base_pivot.reset_index().melt(
-        id_vars="Stage Bucket",
-        var_name="Seniority Bucket",
-        value_name="Contact Roles"
-    )
-    stacked_df["Stage Bucket"] = pd.Categorical(stacked_df["Stage Bucket"], categories=stage_order, ordered=True)
-    stacked_df["Seniority Bucket"] = pd.Categorical(stacked_df["Seniority Bucket"], categories=seniority_order, ordered=True)
-
-    st.altair_chart(
-        alt.Chart(stacked_df).mark_bar().encode(
-            x=alt.X("Stage Bucket:N", sort=stage_order, title="Stage Bucket"),
-            y=alt.Y("Contact Roles:Q", title="# Unique Contact Roles"),
-            color=alt.Color("Seniority Bucket:N", sort=seniority_order, title="Seniority"),
-            tooltip=["Stage Bucket", "Seniority Bucket", "Contact Roles"]
-        ).properties(height=260),
-        use_container_width=True
-    )
-    section_end()
-
-    # ======================================================
-    # Stage Coverage Gates
-    # ======================================================
-    section_start("Stage Coverage Gates")
-    st.caption("Define minimum buying-group depth expected by phase and see which deals fall short.")
-    default_mid_gate = max(2.0, round(avg_cr_won * 0.6, 1)) if avg_cr_won else 2.0
-    default_late_gate = max(3.0, round(avg_cr_won * 0.85, 1)) if avg_cr_won else 3.0
-    mid_gate_target = st.slider("Gate 1 — Mid stage minimum contacts", 0.0, 8.0, float(default_mid_gate), 0.5)
-    late_gate_target = st.slider("Gate 2 — Late stage minimum contacts", 0.0, 10.0, float(default_late_gate), 0.5)
-
-    mid_df = opps.loc[mid_mask].copy() if user_mapped_any else open_opps.copy()
-    late_df = opps.loc[late_mask].copy() if user_mapped_any else open_opps.copy()
-
-    mid_below_gate = mid_df[mid_df["contact_count"] < mid_gate_target]
-    late_below_gate = late_df[late_df["contact_count"] < late_gate_target]
-
-    mid_below_cnt = mid_below_gate["Opportunity ID"].nunique()
-    mid_cnt = mid_df["Opportunity ID"].nunique()
-    mid_below_pct = (mid_below_cnt / mid_cnt) if mid_cnt > 0 else 0
-    mid_below_pipe = mid_below_gate["Amount"].sum()
-
-    late_below_cnt = late_below_gate["Opportunity ID"].nunique()
-    late_cnt = late_df["Opportunity ID"].nunique()
-    late_below_pct = (late_below_cnt / late_cnt) if late_cnt > 0 else 0
-    late_below_pipe = late_below_gate["Amount"].sum()
-
-    st.markdown("**Coverage Findings:**")
-    label_with_tooltip("Mid-stage opps below Gate 1", "Mid opps below Gate 1 contact target.")
-    show_value(f"{mid_below_pct:.1%} ({mid_below_cnt:,} of {mid_cnt:,})")
-    label_with_tooltip("Mid-stage pipeline below Gate 1", "Amount on Mid opps below target.")
-    show_value(f"${mid_below_pipe:,.0f}")
-    label_with_tooltip("Late-stage opps below Gate 2", "Late opps below Gate 2 contact target.")
-    show_value(f"{late_below_pct:.1%} ({late_below_cnt:,} of {late_cnt:,})")
-    label_with_tooltip("Late-stage pipeline below Gate 2", "Amount on Late opps below target.")
-    show_value(f"${late_below_pipe:,.0f}")
-    section_end()
-
-    # ======================================================
-    # Owner Coverage Rollup (Coaching View) — PURE HTML LIST
+    # Owner Coverage Rollup (Coaching View) — EXPANDERS + TABLE
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
-        "Use this to identify which reps have most open deals missing buying-group contacts. "
-        "Coach them to add stakeholders on the deals listed under priority."
+        "Reps are ranked by % of open deals missing buying-group contacts. "
+        "Expand any rep to see exactly which deals to fix."
     )
 
     owner_df = open_df.copy()
-    owner_df["Missing Contacts Flag"] = owner_df["contact_count"].apply(lambda n: 1 if n <= 1 else 0)
-    owner_df["Missing Contacts Amount"] = owner_df.apply(
+    owner_df["is_undercovered"] = owner_df["contact_count"].apply(lambda n: 1 if n <= 1 else 0)
+    owner_df["undercovered_amount"] = owner_df.apply(
         lambda r: r["Amount"] if r["contact_count"] <= 1 else 0,
         axis=1
     )
 
     owner_roll = owner_df.groupby("Opportunity Owner").agg(
         open_opps=("Opportunity ID", "nunique"),
-        opps_missing_contacts=("Missing Contacts Flag", "sum"),
+        opps_undercovered=("is_undercovered", "sum"),
         open_pipeline=("Amount", "sum"),
-        pipeline_missing_contacts=("Missing Contacts Amount", "sum")
+        undercovered_pipeline=("undercovered_amount", "sum")
     ).reset_index()
 
-    owner_roll["% Opps Missing Contacts"] = owner_roll.apply(
-        lambda r: r["opps_missing_contacts"] / r["open_opps"] if r["open_opps"] > 0 else 0,
+    owner_roll["pct_undercovered"] = owner_roll.apply(
+        lambda r: r["opps_undercovered"] / r["open_opps"] if r["open_opps"] > 0 else 0,
         axis=1
     )
-    owner_roll = owner_roll.sort_values("% Opps Missing Contacts", ascending=False)
+    owner_roll = owner_roll.sort_values("pct_undercovered", ascending=False)
 
-    owner_bullets = []
-    for _, r in owner_roll.head(12).iterrows():
-        pct_missing = r["% Opps Missing Contacts"]
-        pct_str = f"{pct_missing:.0%}"
-        pct_html = f"<span style='color:#EF4444;font-weight:700;'>{pct_str}</span>"
-
-        open_opps_n = int(r["open_opps"])
-        miss_opps_n = int(r["opps_missing_contacts"])
-
-        open_pipe = float(r["open_pipeline"])
-        miss_pipe = float(r["pipeline_missing_contacts"])
-
-        owner_name = r.get("Opportunity Owner", "(Unknown)")
-
-        owner_bullets.append(
-            f"{owner_name} owns "
-            f"<b>{open_opps_n}</b> open opportunities, and "
-            f"{pct_html} of them are missing buying-group contacts "
-            f"(<b>{miss_opps_n}</b> / <b>{open_opps_n}</b>). "
-            f"Pipeline at risk: <b>${miss_pipe:,.0f}</b> of <b>${open_pipe:,.0f}</b>."
-        )
-
-    if owner_bullets:
-        st.markdown("<ul style='margin-left:18px;'>", unsafe_allow_html=True)
-        for b in owner_bullets:
-            st.markdown(f"<li style='margin-bottom:6px;'>{b}</li>", unsafe_allow_html=True)
-        st.markdown("</ul>", unsafe_allow_html=True)
-    else:
+    if owner_roll.empty:
         st.markdown("No open opportunities found for the selected filters.")
+    else:
+        # Build a Stage-bucket rank for sorting inside each rep
+        stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
+        owner_df["Stage Bucket"] = owner_df["Opportunity ID"].apply(stage_bucket_for_id)
+        owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
+
+        for _, r in owner_roll.iterrows():
+            owner_name = r.get("Opportunity Owner", "(Unknown)")
+            open_opps_n = int(r["open_opps"])
+            under_n = int(r["opps_undercovered"])
+            pct_under = r["pct_undercovered"]
+            open_pipe = float(r["open_pipeline"])
+            under_pipe = float(r["undercovered_pipeline"])
+
+            pct_str = f"{pct_under:.0%}"
+            exp_title = (
+                f"{owner_name} — {pct_str} open opps under-covered "
+                f"({under_n}/{open_opps_n}), "
+                f"pipeline at risk ${under_pipe:,.0f} of ${open_pipe:,.0f}"
+            )
+
+            with st.expander(exp_title, expanded=False):
+                rep_under = owner_df[
+                    (owner_df["Opportunity Owner"] == owner_name) &
+                    (owner_df["contact_count"] <= 1)
+                ].copy()
+
+                if rep_under.empty:
+                    st.write("✅ No under-covered open opportunities for this rep.")
+                else:
+                    rep_under = rep_under.sort_values(
+                        ["Stage Bucket Rank", "Amount"],
+                        ascending=[True, False]
+                    )
+
+                    display_cols = [
+                        "Opportunity Name",
+                        "Account ID",
+                        "Stage",
+                        "Created Date",
+                        "Amount",
+                        "contact_count"
+                    ]
+                    rep_table = rep_under[display_cols].rename(columns={
+                        "contact_count": "# Contact Roles"
+                    })
+
+                    rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
+                    rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
+
+                    st.dataframe(
+                        rep_table,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    st.caption(
+                        "Action: Add missing buying-group contacts on these deals. "
+                        "Prioritize Late-stage deals first to protect near-term pipeline."
+                    )
 
     section_end()
 
@@ -990,13 +905,13 @@ if opps_file and roles_file:
     ).head(15)
 
     priority_bullets = []
-    for _, r in priority_df.iterrows():
+    for _, rr in priority_df.iterrows():
         priority_bullets.append(
-            f"[{r.get('Stage Bucket','Open')}] {r.get('Opportunity Name','(No name)')} "
-            f"(ID {r.get('Opportunity ID','')}) — Stage: {r.get('Stage','')}, "
-            f"Owner: {r.get('Opportunity Owner','')}, "
-            f"Contacts: {int(r.get('contact_count',0))}, "
-            f"Amount: ${r.get('Amount',0):,.0f}"
+            f"[{rr.get('Stage Bucket','Open')}] {rr.get('Opportunity Name','(No name)')} "
+            f"(ID {rr.get('Opportunity ID','')}) — Stage: {rr.get('Stage','')}, "
+            f"Owner: {rr.get('Opportunity Owner','')}, "
+            f"Contacts: {int(rr.get('contact_count',0))}, "
+            f"Amount: ${rr.get('Amount',0):,.0f}"
         )
 
     if priority_bullets:
@@ -1018,11 +933,11 @@ if opps_file and roles_file:
         )
 
         won_zero_bullets = []
-        for _, r in won_zero_df.sort_values("Amount", ascending=False).head(20).iterrows():
+        for _, rr in won_zero_df.sort_values("Amount", ascending=False).head(20).iterrows():
             won_zero_bullets.append(
-                f"{r.get('Opportunity Name','(No name)')} (ID {r.get('Opportunity ID','')}) — "
-                f"Owner: {r.get('Opportunity Owner','')}, Stage: {r.get('Stage','')}, "
-                f"Amount: ${r.get('Amount',0):,.0f}"
+                f"{rr.get('Opportunity Name','(No name)')} (ID {rr.get('Opportunity ID','')}) — "
+                f"Owner: {rr.get('Opportunity Owner','')}, Stage: {rr.get('Stage','')}, "
+                f"Amount: ${rr.get('Amount',0):,.0f}"
             )
 
         for b in won_zero_bullets:
@@ -1033,7 +948,7 @@ if opps_file and roles_file:
         won_zero_bullets = []
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS
+    # INSIGHTS — 5 CHARTS (unchanged)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1045,7 +960,6 @@ if opps_file and roles_file:
     chart_df.loc[won_mask, "Stage Group"] = "Won"
     chart_df.loc[lost_mask, "Stage Group"] = "Lost"
 
-    # Chart 1: Win rate vs roles (bars+line+CI)
     def contact_bucket_winrate(n):
         n = float(n) if pd.notna(n) else 0
         if n <= 0:
@@ -1068,9 +982,9 @@ if opps_file and roles_file:
 
     winrate_bucket["n"] = winrate_bucket["won"] + winrate_bucket["lost"]
     winrate_bucket["Win Rate"] = winrate_bucket.apply(
-        lambda r: r["won"] / r["n"] if r["n"] > 0 else 0, axis=1
+        lambda rr: rr["won"] / rr["n"] if rr["n"] > 0 else 0, axis=1
     )
-    cis = winrate_bucket.apply(lambda r: wilson_ci(r["won"], r["n"]), axis=1)
+    cis = winrate_bucket.apply(lambda rr: wilson_ci(rr["won"], rr["n"]), axis=1)
     winrate_bucket["CI Low"] = [c[0] for c in cis]
     winrate_bucket["CI High"] = [c[1] for c in cis]
 
@@ -1093,16 +1007,9 @@ if opps_file and roles_file:
             "won", "lost", "n"
         ]
     )
-    annotation_wr = alt.Chart(pd.DataFrame({
-        "x": ["2"],
-        "y": [winrate_bucket.loc[winrate_bucket["Winrate Bucket"] == "2", "Win Rate"].max() if not winrate_bucket.empty else 0.0],
-        "text": ["Win rate rises after 2+ roles"]
-    })).mark_text(dy=-18, fontSize=12, fontWeight="bold").encode(
-        x="x:N", y="y:Q", text="text:N"
-    )
 
     st.altair_chart(
-        alt.layer(bars_n, band_ci, line_wr, annotation_wr)
+        alt.layer(bars_n, band_ci, line_wr)
         .resolve_scale(y='independent')
         .properties(height=280, title="Win rate improves sharply after 2+ contact roles"),
         use_container_width=True
@@ -1110,7 +1017,6 @@ if opps_file and roles_file:
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # Chart 2: Pipeline donut (open)
     open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
     open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else "2+ roles")
@@ -1128,7 +1034,6 @@ if opps_file and roles_file:
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # Chart 3: Open coverage funnel
     funnel_df = open_chart_df.copy()
     funnel_df["Coverage Funnel Bucket"] = funnel_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else ("2 roles" if n == 2 else "3+ roles"))
@@ -1147,7 +1052,6 @@ if opps_file and roles_file:
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # Chart 4: Velocity vs coverage
     time_df = chart_df.copy()
     time_df["days_to_close"] = time_df.apply(days_diff, axis=1)
     time_df["open_age_days"] = None
@@ -1191,7 +1095,6 @@ if opps_file and roles_file:
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
-    # Chart 5: Stage bucket heatmap
     stage_cov_df = opps.copy()
     stage_cov_df["Stage Bucket"] = stage_cov_df["Opportunity ID"].apply(stage_bucket_for_id)
     stage_cov_df["Coverage Bucket"] = stage_cov_df["contact_count"].apply(
@@ -1203,7 +1106,7 @@ if opps_file and roles_file:
     stage_totals = heat_base.groupby("Stage Bucket")["Opportunity ID"].nunique().reset_index().rename(columns={"Opportunity ID":"Stage Total"})
     heat_counts = heat_counts.merge(stage_totals, on="Stage Bucket", how="left")
     heat_counts["Pct"] = heat_counts.apply(
-        lambda r: r["Opportunity ID"]/r["Stage Total"] if r["Stage Total"]>0 else 0, axis=1
+        lambda rr: rr["Opportunity ID"]/rr["Stage Total"] if rr["Stage Total"]>0 else 0, axis=1
     )
 
     heat = alt.Chart(heat_counts).mark_rect().encode(
@@ -1311,12 +1214,6 @@ if opps_file and roles_file:
             ["% Open Opps Missing Contacts", f"{risk_pct:.1%}"],
             ["% Open Pipeline at Risk", f"{pct_open_pipe_risk:.1%}"],
         ],
-        "Stage Coverage Gates": [
-            ["Mid-stage opps below Gate 1", f"{mid_below_pct:.1%} ({mid_below_cnt:,} of {mid_cnt:,})"],
-            ["Mid-stage pipeline below Gate 1", f"${mid_below_pipe:,.0f}"],
-            ["Late-stage opps below Gate 2", f"{late_below_pct:.1%} ({late_below_cnt:,} of {late_cnt:,})"],
-            ["Late-stage pipeline below Gate 2", f"${late_below_pipe:,.0f}"],
-        ],
         "Simulator": [
             ["Expected Won Pipeline (Open) — Current", f"${current_expected_wins:,.0f}"],
             ["Target Avg Contacts (Open)", f"{target_contacts:.1f} vs {avg_cr_open:.1f}"],
@@ -1327,13 +1224,19 @@ if opps_file and roles_file:
     }
 
     won_zero_rows_for_pdf = won_zero_bullets[:15] if won_zero_bullets else []
-    owner_bullets_plain = [re.sub("<.*?>", "", b) for b in owner_bullets]
+    owner_bullets_plain = [
+        f"{row['Opportunity Owner']} owns {int(row['open_opps'])} open opps; "
+        f"{row['pct_undercovered']:.0%} under-covered; "
+        f"pipeline at risk ${row['undercovered_pipeline']:,.0f} of ${row['open_pipeline']:,.0f}"
+        for _, row in owner_roll.head(12).iterrows()
+    ]
+
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=bullets,
         chart_pngs=pdf_chart_pngs,
         won_zero_rows=won_zero_rows_for_pdf,
-        owner_bullets=owner_bullets_plain[:12],
+        owner_bullets=owner_bullets_plain,
         priority_bullets=priority_bullets[:12]
     )
 
