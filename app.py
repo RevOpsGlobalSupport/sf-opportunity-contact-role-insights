@@ -790,7 +790,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — EXPANDERS + TABLE
+    # Owner Coverage Rollup (Coaching View) — EXPANDERS + TABLE (FIXED)
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -799,19 +799,23 @@ if opps_file and roles_file:
     )
 
     owner_df = open_df.copy()
-    owner_df["is_undercovered"] = owner_df["contact_count"].apply(lambda n: 1 if n <= 1 else 0)
-    owner_df["undercovered_amount"] = owner_df.apply(
-        lambda r: r["Amount"] if r["contact_count"] <= 1 else 0,
-        axis=1
-    )
 
-    owner_roll = owner_df.groupby("Opportunity Owner").agg(
+    # clean owner names
+    owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("").astype(str).str.strip()
+    owner_df = owner_df[owner_df["Opportunity Owner"] != ""].copy()
+
+    # flags
+    owner_df["is_undercovered"] = (owner_df["contact_count"] <= 1).astype(int)
+    owner_df["undercovered_amount"] = owner_df["Amount"].where(owner_df["contact_count"] <= 1, 0)
+
+    owner_roll = owner_df.groupby("Opportunity Owner", dropna=False).agg(
         open_opps=("Opportunity ID", "nunique"),
         opps_undercovered=("is_undercovered", "sum"),
         open_pipeline=("Amount", "sum"),
         undercovered_pipeline=("undercovered_amount", "sum")
     ).reset_index()
 
+    # pct + sort
     owner_roll["pct_undercovered"] = owner_roll.apply(
         lambda r: r["opps_undercovered"] / r["open_opps"] if r["open_opps"] > 0 else 0,
         axis=1
@@ -821,23 +825,27 @@ if opps_file and roles_file:
     if owner_roll.empty:
         st.markdown("No open opportunities found for the selected filters.")
     else:
-        # Build a Stage-bucket rank for sorting inside each rep
+        # rank stages so reps see late-stage first
         stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
         owner_df["Stage Bucket"] = owner_df["Opportunity ID"].apply(stage_bucket_for_id)
         owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
 
+        shown = 0
         for _, r in owner_roll.iterrows():
-            owner_name = r.get("Opportunity Owner", "(Unknown)")
             open_opps_n = int(r["open_opps"])
+            if open_opps_n == 0:
+                continue  # skip any empty owners
+
+            owner_name = r["Opportunity Owner"]
             under_n = int(r["opps_undercovered"])
-            pct_under = r["pct_undercovered"]
+            pct_under = float(r["pct_undercovered"])
             open_pipe = float(r["open_pipeline"])
             under_pipe = float(r["undercovered_pipeline"])
 
-            pct_str = f"{pct_under:.0%}"
+            # CLEAN plain-text label (no markdown / HTML)
             exp_title = (
-                f"{owner_name} — {pct_str} open opps under-covered "
-                f"({under_n}/{open_opps_n}), "
+                f"{owner_name} — {pct_under:.0%} of open opps under-covered "
+                f"({under_n}/{open_opps_n}); "
                 f"pipeline at risk ${under_pipe:,.0f} of ${open_pipe:,.0f}"
             )
 
@@ -870,16 +878,16 @@ if opps_file and roles_file:
                     rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
                     rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
 
-                    st.dataframe(
-                        rep_table,
-                        use_container_width=True,
-                        hide_index=True
-                    )
+                    st.dataframe(rep_table, use_container_width=True, hide_index=True)
 
                     st.caption(
                         "Action: Add missing buying-group contacts on these deals. "
                         "Prioritize Late-stage deals first to protect near-term pipeline."
                     )
+
+            shown += 1
+            if shown >= 12:
+                break
 
     section_end()
 
@@ -948,7 +956,7 @@ if opps_file and roles_file:
         won_zero_bullets = []
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS (unchanged)
+    # INSIGHTS — 5 CHARTS
     # ======================================================
     section_start("Insights")
     st.caption(
