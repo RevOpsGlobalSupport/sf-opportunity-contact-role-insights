@@ -386,12 +386,6 @@ st.markdown("""
   border-radius:8px;
   display:inline-block;
 }
-.small-help{
-  font-size:14px;
-  color:#334155;
-  line-height:1.55;
-  margin-bottom:8px;
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -914,7 +908,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — CLEAN HTML BULLETS
+    # Owner Coverage Rollup (Coaching View) — PURE HTML LIST
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -965,15 +959,17 @@ if opps_file and roles_file:
         )
 
     if owner_bullets:
+        st.markdown("<ul style='margin-left:18px;'>", unsafe_allow_html=True)
         for b in owner_bullets:
-            st.markdown(f"• {b}", unsafe_allow_html=True)
+            st.markdown(f"<li style='margin-bottom:6px;'>{b}</li>", unsafe_allow_html=True)
+        st.markdown("</ul>", unsafe_allow_html=True)
     else:
-        st.markdown("• No open opportunities found for the selected filters.")
+        st.markdown("No open opportunities found for the selected filters.")
 
     section_end()
 
     # ======================================================
-    # Top Open Opportunities to Fix First — SORT LATE→EARLY & EXCLUDE Qualified Out
+    # Top Open Opportunities to Fix First
     # ======================================================
     section_start("Top Open Opportunities to Fix First")
     st.caption(
