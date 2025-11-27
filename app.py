@@ -914,7 +914,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — FIXED + SIMPLE TERMS
+    # Owner Coverage Rollup (Coaching View) — CLEAN HTML BULLETS
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -940,21 +940,28 @@ if opps_file and roles_file:
         lambda r: r["opps_missing_contacts"] / r["open_opps"] if r["open_opps"] > 0 else 0,
         axis=1
     )
-
     owner_roll = owner_roll.sort_values("% Opps Missing Contacts", ascending=False)
 
     owner_bullets = []
     for _, r in owner_roll.head(12).iterrows():
         pct_missing = r["% Opps Missing Contacts"]
         pct_str = f"{pct_missing:.0%}"
-        # red-highlight the % part
         pct_html = f"<span style='color:#EF4444;font-weight:700;'>{pct_str}</span>"
 
+        open_opps_n = int(r["open_opps"])
+        miss_opps_n = int(r["opps_missing_contacts"])
+
+        open_pipe = float(r["open_pipeline"])
+        miss_pipe = float(r["pipeline_missing_contacts"])
+
+        owner_name = r.get("Opportunity Owner", "(Unknown)")
+
         owner_bullets.append(
-            f"{r.get('Opportunity Owner','(Unknown)')} owns **{int(r['open_opps'])}** open opportunities, "
-            f"and **{pct_html}** of them are missing buying-group contacts "
-            f"({int(r['opps_missing_contacts'])}/{int(r['open_opps'])}). "
-            f"Pipeline at risk: **${r['pipeline_missing_contacts']:,.0f}** of **${r['open_pipeline']:,.0f}**."
+            f"{owner_name} owns "
+            f"<b>{open_opps_n}</b> open opportunities, and "
+            f"{pct_html} of them are missing buying-group contacts "
+            f"(<b>{miss_opps_n}</b> / <b>{open_opps_n}</b>). "
+            f"Pipeline at risk: <b>${miss_pipe:,.0f}</b> of <b>${open_pipe:,.0f}</b>."
         )
 
     if owner_bullets:
@@ -975,10 +982,7 @@ if opps_file and roles_file:
     )
 
     priority_df = open_df[open_df["contact_count"] <= 1].copy()
-    # Exclude Qualified Out opportunities
     priority_df = priority_df[~priority_df["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
-
-    # Add stage bucket for sorting
     priority_df["Stage Bucket"] = priority_df["Opportunity ID"].apply(stage_bucket_for_id)
 
     stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
@@ -1033,7 +1037,7 @@ if opps_file and roles_file:
         won_zero_bullets = []
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS (unchanged)
+    # INSIGHTS — 5 CHARTS
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1220,11 +1224,8 @@ if opps_file and roles_file:
 
     section_end()
 
-    # ======================================================
-    # PDF charts (same 5)
-    # ======================================================
+    # ========== PDF charts (same 5) ==========
     pdf_chart_pngs = []
-
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
     x = winrate_bucket["Winrate Bucket"].tolist()
@@ -1330,7 +1331,7 @@ if opps_file and roles_file:
     }
 
     won_zero_rows_for_pdf = won_zero_bullets[:15] if won_zero_bullets else []
-    owner_bullets_plain = [re.sub("<.*?>", "", b) for b in owner_bullets]  # strip html for pdf
+    owner_bullets_plain = [re.sub("<.*?>", "", b) for b in owner_bullets]
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=bullets,
