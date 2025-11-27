@@ -728,10 +728,10 @@ if opps_file and roles_file:
     )
     label_with_tooltip("Open Pipeline at Risk", "Sum of Amount for open opps with 0–1 contact roles.")
     show_value(f"${open_pipeline_risk:,.0f}")
-    label_with_tooltip("% of Open Opps Under-Covered", "Open opps with 0–1 roles ÷ total open opps.")
+    label_with_tooltip("% of Open Opps Missing Contacts", "Open opps with 0–1 roles ÷ total open opps.")
     show_value(f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})")
     pct_open_pipe_risk = (open_pipeline_risk / open_pipeline) if open_pipeline > 0 else 0
-    label_with_tooltip("% of Open Pipeline at Risk", "Under-covered open pipeline ÷ total open pipeline.")
+    label_with_tooltip("% of Open Pipeline at Risk", "Risky open pipeline ÷ total open pipeline.")
     show_value(f"{pct_open_pipe_risk:.1%}")
     section_end()
 
@@ -914,72 +914,96 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — bullets
+    # Owner Coverage Rollup (Coaching View) — FIXED + SIMPLE TERMS
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
-        "Use this to identify which reps have the highest % of open pipeline at risk. "
-        "Coach those reps to add contacts to their under-covered deals."
+        "Use this to identify which reps have most open deals missing buying-group contacts. "
+        "Coach them to add stakeholders on the deals listed under priority."
     )
 
     owner_df = open_df.copy()
-    owner_df["UnderCovered"] = owner_df["contact_count"].apply(lambda n: 1 if n <= 1 else 0)
+    owner_df["Missing Contacts Flag"] = owner_df["contact_count"].apply(lambda n: 1 if n <= 1 else 0)
+    owner_df["Missing Contacts Amount"] = owner_df.apply(
+        lambda r: r["Amount"] if r["contact_count"] <= 1 else 0,
+        axis=1
+    )
 
     owner_roll = owner_df.groupby("Opportunity Owner").agg(
         open_opps=("Opportunity ID", "nunique"),
-        under_opps=("UnderCovered", "sum"),
+        opps_missing_contacts=("Missing Contacts Flag", "sum"),
         open_pipeline=("Amount", "sum"),
-        under_pipeline=("Amount", lambda s: s[owner_df.loc[s.index, "contact_count"] <= 1].sum())
+        pipeline_missing_contacts=("Missing Contacts Amount", "sum")
     ).reset_index()
 
-    owner_roll["UnderCovered %"] = owner_roll.apply(
-        lambda r: r["under_opps"] / r["open_opps"] if r["open_opps"] > 0 else 0,
+    owner_roll["% Opps Missing Contacts"] = owner_roll.apply(
+        lambda r: r["opps_missing_contacts"] / r["open_opps"] if r["open_opps"] > 0 else 0,
         axis=1
     )
-    owner_roll = owner_roll.sort_values("UnderCovered %", ascending=False)
+
+    owner_roll = owner_roll.sort_values("% Opps Missing Contacts", ascending=False)
 
     owner_bullets = []
     for _, r in owner_roll.head(12).iterrows():
+        pct_missing = r["% Opps Missing Contacts"]
+        pct_str = f"{pct_missing:.0%}"
+        # red-highlight the % part
+        pct_html = f"<span style='color:#EF4444;font-weight:700;'>{pct_str}</span>"
+
         owner_bullets.append(
-            f"{r.get('Opportunity Owner','(Unknown)')}: "
-            f"{r['UnderCovered %']:.0%} under-covered open opps "
-            f"({int(r['under_opps'])}/{int(r['open_opps'])}), "
-            f"Under-covered pipeline ${r['under_pipeline']:,.0f} of ${r['open_pipeline']:,.0f}"
+            f"{r.get('Opportunity Owner','(Unknown)')} owns **{int(r['open_opps'])}** open opportunities, "
+            f"and **{pct_html}** of them are missing buying-group contacts "
+            f"({int(r['opps_missing_contacts'])}/{int(r['open_opps'])}). "
+            f"Pipeline at risk: **${r['pipeline_missing_contacts']:,.0f}** of **${r['open_pipeline']:,.0f}**."
         )
 
     if owner_bullets:
         for b in owner_bullets:
-            st.markdown(f"• {b}")
+            st.markdown(f"• {b}", unsafe_allow_html=True)
     else:
         st.markdown("• No open opportunities found for the selected filters.")
 
     section_end()
 
     # ======================================================
-    # Top Open Opportunities to Fix First — bullets
+    # Top Open Opportunities to Fix First — SORT LATE→EARLY & EXCLUDE Qualified Out
     # ======================================================
     section_start("Top Open Opportunities to Fix First")
     st.caption(
-        "Prioritize these high-value open deals with 0–1 contacts first. "
-        "Adding buying-group coverage here delivers the fastest win-rate lift."
+        "Prioritize these open deals first. They are missing contacts and sorted from Late → Early stages "
+        "so the most urgent deals appear on top."
     )
 
     priority_df = open_df[open_df["contact_count"] <= 1].copy()
-    priority_df = priority_df.sort_values("Amount", ascending=False).head(15)
+    # Exclude Qualified Out opportunities
+    priority_df = priority_df[~priority_df["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
+
+    # Add stage bucket for sorting
+    priority_df["Stage Bucket"] = priority_df["Opportunity ID"].apply(stage_bucket_for_id)
+
+    stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
+    priority_df["Stage Bucket Rank"] = priority_df["Stage Bucket"].map(stage_priority_order).fillna(3)
+
+    priority_df = priority_df.sort_values(
+        ["Stage Bucket Rank", "Amount"],
+        ascending=[True, False]
+    ).head(15)
 
     priority_bullets = []
     for _, r in priority_df.iterrows():
         priority_bullets.append(
-            f"{r.get('Opportunity Name','(No name)')} (ID {r.get('Opportunity ID','')}) — "
-            f"Stage: {r.get('Stage','')}, Owner: {r.get('Opportunity Owner','')}, "
-            f"Contacts: {int(r.get('contact_count',0))}, Amount: ${r.get('Amount',0):,.0f}"
+            f"[{r.get('Stage Bucket','Open')}] {r.get('Opportunity Name','(No name)')} "
+            f"(ID {r.get('Opportunity ID','')}) — Stage: {r.get('Stage','')}, "
+            f"Owner: {r.get('Opportunity Owner','')}, "
+            f"Contacts: {int(r.get('contact_count',0))}, "
+            f"Amount: ${r.get('Amount',0):,.0f}"
         )
 
     if priority_bullets:
         for b in priority_bullets:
             st.markdown(f"• {b}")
     else:
-        st.markdown("• No under-covered open opportunities found.")
+        st.markdown("• No under-covered open opportunities found (after excluding Qualified Out).")
 
     section_end()
 
@@ -1009,7 +1033,7 @@ if opps_file and roles_file:
         won_zero_bullets = []
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS (keep best ones)
+    # INSIGHTS — 5 CHARTS (unchanged)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1197,7 +1221,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF charts (same 5 strong charts)
+    # PDF charts (same 5)
     # ======================================================
     pdf_chart_pngs = []
 
@@ -1287,7 +1311,7 @@ if opps_file and roles_file:
         ],
         "Pipeline at Risk": [
             ["Open Pipeline at Risk (0–1 roles)", f"${open_pipeline_risk:,.0f}"],
-            ["% Open Opps Under-Covered", f"{risk_pct:.1%}"],
+            ["% Open Opps Missing Contacts", f"{risk_pct:.1%}"],
             ["% Open Pipeline at Risk", f"{pct_open_pipe_risk:.1%}"],
         ],
         "Stage Coverage Gates": [
@@ -1306,12 +1330,13 @@ if opps_file and roles_file:
     }
 
     won_zero_rows_for_pdf = won_zero_bullets[:15] if won_zero_bullets else []
+    owner_bullets_plain = [re.sub("<.*?>", "", b) for b in owner_bullets]  # strip html for pdf
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=bullets,
         chart_pngs=pdf_chart_pngs,
         won_zero_rows=won_zero_rows_for_pdf,
-        owner_bullets=owner_bullets[:12],
+        owner_bullets=owner_bullets_plain[:12],
         priority_bullets=priority_bullets[:12]
     )
 
