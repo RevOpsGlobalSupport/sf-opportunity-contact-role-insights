@@ -948,7 +948,7 @@ if opps_file and roles_file:
         f"(${incremental_won_pipeline:+,.0f}, {pct_pipe:+.0%})"
     )
 
-    # ---- Coverage-adjusted forecast with MORE detail ----
+    # ---- Coverage-adjusted forecast with comparisons + deltas ----
     st.markdown("**Coverage-Adjusted Forecast (risk-weighted today):**")
 
     st.markdown(
@@ -982,26 +982,46 @@ Deals with fewer contacts are less likely to convert, so we apply a simple risk 
     coverage_adj_win_rate = expected_open_wins_adj / open_pipeline if open_pipeline > 0 else 0
     forecast_gap = max(0, current_expected_wins - expected_open_wins_adj)
 
+    # 1) Adjusted win rate vs current win rate
+    delta_adj_wr_pp = (coverage_adj_win_rate - win_rate) * 100
+    pct_adj_wr = ((coverage_adj_win_rate - win_rate) / win_rate) if win_rate > 0 else 0
+
     st.markdown("<div class='small-help'><b>Adjusted Win Rate:</b> Current win rate discounted by contact depth across open deals.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage-Adjusted Win Rate (Open)",
         "Open win rate discounted for low-contact deals to reflect risk."
     )
-    show_value(f"{coverage_adj_win_rate:.1%}")
+    show_value(
+        f"{coverage_adj_win_rate:.1%} vs Current {win_rate:.1%} "
+        f"({delta_adj_wr_pp:+.1f} pp, {pct_adj_wr:+.0%})"
+    )
+
+    # 2) Adjusted expected wins vs current expected wins
+    delta_adj_pipe = expected_open_wins_adj - current_expected_wins
+    pct_adj_pipe = (delta_adj_pipe / current_expected_wins) if current_expected_wins > 0 else 0
 
     st.markdown("<div class='small-help'><b>Adjusted Expected Wins:</b> Sum of (Amount × adjusted win rate) across open deals.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage-Adjusted Expected Won Pipeline (Open)",
         "Risk-weighted expected won pipeline on open deals."
     )
-    show_value(f"${expected_open_wins_adj:,.0f}")
+    show_value(
+        f"${expected_open_wins_adj:,.0f} vs Current ${current_expected_wins:,.0f} "
+        f"(${delta_adj_pipe:+,.0f}, {pct_adj_pipe:+.0%})"
+    )
+
+    # 3) Risk gap vs current expected wins
+    gap_pct_of_current = (forecast_gap / current_expected_wins) if current_expected_wins > 0 else 0
 
     st.markdown("<div class='small-help'><b>Risk Gap:</b> Dollar difference between naïve forecast and risk-weighted forecast.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage Risk Gap",
         "Difference between naïve expected wins and risk-weighted expected wins."
     )
-    show_value(f"${forecast_gap:,.0f}")
+    show_value(
+        f"${forecast_gap:,.0f} exposure "
+        f"({gap_pct_of_current:.0%} of Current Expected Won Pipeline)"
+    )
 
     section_end()
 
