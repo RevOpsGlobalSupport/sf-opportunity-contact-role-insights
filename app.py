@@ -375,6 +375,18 @@ st.markdown("""
   border-radius:8px;
   display:inline-block;
 }
+.small-help{
+  font-size:14px;
+  color:#334155;
+  line-height:1.55;
+  margin-bottom:8px;
+}
+.help-bullets{
+  font-size:14px;
+  color:#0f172a;
+  line-height:1.6;
+  margin:6px 0 10px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -740,7 +752,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Seniority / Job-Level Coverage by Stage Bucket (renamed)
+    # Seniority / Job-Level Coverage by Stage Bucket
     # ======================================================
     roles_for_matrix = roles.copy()
     if "Title" not in roles_for_matrix.columns:
@@ -902,10 +914,8 @@ if opps_file and roles_file:
     enhanced_expected_wins = enhanced_win_rate * open_pipeline
     incremental_won_pipeline = max(0, enhanced_expected_wins - current_expected_wins)
 
-    # ---- Modeled uplift block with comparisons ----
     st.markdown("**Modeled Uplift (if Open coverage improves):**")
 
-    # Target contacts vs current open contacts
     delta_contacts = target_contacts - avg_cr_open
     pct_contacts = (delta_contacts / avg_cr_open) if avg_cr_open > 0 else 0
     label_with_tooltip(
@@ -917,7 +927,6 @@ if opps_file and roles_file:
         f"({delta_contacts:+.1f}, {pct_contacts:+.0%})"
     )
 
-    # Enhanced win rate vs current
     delta_wr_pp = (enhanced_win_rate - win_rate) * 100
     pct_wr = ((enhanced_win_rate - win_rate) / win_rate) if win_rate > 0 else 0
     label_with_tooltip(
@@ -929,7 +938,6 @@ if opps_file and roles_file:
         f"({delta_wr_pp:+.1f} pp, {pct_wr:+.0%})"
     )
 
-    # Enhanced expected wins vs current expected wins
     pct_pipe = (incremental_won_pipeline / current_expected_wins) if current_expected_wins > 0 else 0
     label_with_tooltip(
         "Enhanced Expected Won Pipeline (Open)",
@@ -940,8 +948,27 @@ if opps_file and roles_file:
         f"(${incremental_won_pipeline:+,.0f}, {pct_pipe:+.0%})"
     )
 
-    # ---- Coverage-adjusted forecast ----
+    # ---- Coverage-adjusted forecast with MORE detail ----
     st.markdown("**Coverage-Adjusted Forecast (risk-weighted today):**")
+
+    st.markdown(
+        """
+<div class="small-help">
+This view estimates what your open pipeline is *actually* worth today after accounting for buying-group risk.  
+Deals with fewer contacts are less likely to convert, so we apply a simple risk discount:
+- **0 roles → heavier discount**
+- **1 role → moderate discount**
+- **2+ roles → no discount**
+</div>
+<div class="help-bullets">
+<b>How to interpret:</b><br>
+• If Coverage-Adjusted Win Rate is much lower than Current Win Rate, your open pipeline is over-optimistic due to weak coverage.<br>
+• The Expected Won Pipeline (Adjusted) is a conservative “what we should expect to close” number today.<br>
+• Coverage Risk Gap shows the dollar exposure caused by low stakeholder depth. Closing that gap = easiest upside.
+</div>
+        """,
+        unsafe_allow_html=True
+    )
 
     def weight_for_contacts(n):
         if n <= 0: return 0.6
@@ -955,18 +982,21 @@ if opps_file and roles_file:
     coverage_adj_win_rate = expected_open_wins_adj / open_pipeline if open_pipeline > 0 else 0
     forecast_gap = max(0, current_expected_wins - expected_open_wins_adj)
 
+    st.markdown("<div class='small-help'><b>Adjusted Win Rate:</b> Current win rate discounted by contact depth across open deals.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage-Adjusted Win Rate (Open)",
         "Open win rate discounted for low-contact deals to reflect risk."
     )
     show_value(f"{coverage_adj_win_rate:.1%}")
 
+    st.markdown("<div class='small-help'><b>Adjusted Expected Wins:</b> Sum of (Amount × adjusted win rate) across open deals.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage-Adjusted Expected Won Pipeline (Open)",
         "Risk-weighted expected won pipeline on open deals."
     )
     show_value(f"${expected_open_wins_adj:,.0f}")
 
+    st.markdown("<div class='small-help'><b>Risk Gap:</b> Dollar difference between naïve forecast and risk-weighted forecast.</div>", unsafe_allow_html=True)
     label_with_tooltip(
         "Coverage Risk Gap",
         "Difference between naïve expected wins and risk-weighted expected wins."
@@ -1121,10 +1151,9 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF charts creation
+    # PDF charts creation (same as before)
     # ======================================================
     pdf_chart_pngs = []
-
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
     x = winrate_bucket["Winrate Bucket"].tolist()
