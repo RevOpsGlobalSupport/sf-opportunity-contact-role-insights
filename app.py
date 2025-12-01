@@ -805,7 +805,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — FIXED BODY TEXT (st.write)
+    # Owner Coverage Rollup (Coaching View) — FINAL FIX
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -855,9 +855,9 @@ if opps_file and roles_file:
             exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
 
             with st.expander(exp_title, expanded=False):
-                # ✅ plain text render
-                st.write(
-                    f"Pipeline at risk: {fmt_money(under_pipe)} out of {fmt_money(open_pipe)} open pipeline."
+                # ✅ Literal text, no markdown parsing, no "out of"
+                st.text(
+                    f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline"
                 )
 
                 rep_under = owner_df[
@@ -1243,7 +1243,7 @@ if opps_file and roles_file:
     owner_bullets_plain = [
         f"{row['Opportunity Owner']} owns {int(row['open_opps'])} open opps; "
         f"{row['pct_undercovered']:.0%} under-covered; "
-        f"pipeline at risk {fmt_money(row['undercovered_pipeline'])} out of {fmt_money(row['open_pipeline'])}"
+        f"pipeline at risk {fmt_money(row['undercovered_pipeline'])} / {fmt_money(row['open_pipeline'])}"
         for _, row in owner_roll.head(12).iterrows()
     ]
 
