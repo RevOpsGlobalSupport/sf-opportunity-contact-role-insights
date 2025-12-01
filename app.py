@@ -805,7 +805,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — title FIX (NO PIPELINE TEXT IN TITLE)
+    # Owner Coverage Rollup (Coaching View) — FIXED BODY TEXT (st.write)
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -852,13 +852,12 @@ if opps_file and roles_file:
             open_pipe = float(r["open_pipeline"])
             under_pipe = float(r["undercovered_pipeline"])
 
-            # Short title only — NO pipeline words here
             exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
 
             with st.expander(exp_title, expanded=False):
-                # Clean, readable pipeline line inside body
-                st.markdown(
-                    f"**Pipeline at risk:** {fmt_money(under_pipe)} out of {fmt_money(open_pipe)} open pipeline."
+                # ✅ plain text render
+                st.write(
+                    f"Pipeline at risk: {fmt_money(under_pipe)} out of {fmt_money(open_pipe)} open pipeline."
                 )
 
                 rep_under = owner_df[
@@ -1241,7 +1240,6 @@ if opps_file and roles_file:
         ],
     }
 
-    won_zero_rows_for_pdf = won_zero_bullets[:15] if won_zero_bullets else []
     owner_bullets_plain = [
         f"{row['Opportunity Owner']} owns {int(row['open_opps'])} open opps; "
         f"{row['pct_undercovered']:.0%} under-covered; "
@@ -1253,7 +1251,7 @@ if opps_file and roles_file:
         metrics_dict=metrics_dict,
         bullets=bullets,
         chart_pngs=pdf_chart_pngs,
-        won_zero_rows=won_zero_rows_for_pdf,
+        won_zero_rows=won_zero_bullets[:15] if won_zero_bullets else [],
         owner_bullets=owner_bullets_plain,
         priority_bullets=priority_bullets[:12] if 'priority_bullets' in locals() else []
     )
