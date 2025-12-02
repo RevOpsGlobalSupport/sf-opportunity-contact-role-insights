@@ -569,7 +569,116 @@ if opps_file and roles_file:
     opps = opps.merge(cr_counts.rename("contact_count"), on="Opportunity ID", how="left")
     opps["contact_count"] = pd.to_numeric(opps["contact_count"], errors="coerce").fillna(0)
 
+    # Stage bucket helper
+    stage_lookup = opps.set_index("Opportunity ID")["Stage"].to_dict()
+
+    def stage_bucket_for_id(opp_id):
+        s = stage_lookup.get(opp_id, "")
+        if user_mapped_any:
+            if s in won_stages: return "Won"
+            if s in lost_stages: return "Lost"
+            if s in late_stages: return "Late"
+            if s in mid_stages: return "Mid"
+            if s in early_stages: return "Early"
+            return "Open"
+        sl = str(s).lower()
+        if "won" in sl: return "Won"
+        if "lost" in sl: return "Lost"
+        return "Open"
+
+    opps["Stage Bucket"] = opps["Opportunity ID"].apply(stage_bucket_for_id)
+
+    # ======================================================
+    # Stage Coverage Gates (NEW)
+    # ======================================================
+    section_start("Stage Coverage Gates")
+    st.caption(
+        "Define the minimum buying-group contacts you expect at each stage bucket. "
+        "We’ll compute how many deals and how much pipeline meet those gates."
+    )
+
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        early_gate = st.number_input("Early stage gate (min contacts)", min_value=0, max_value=10, value=1, step=1)
+    with g2:
+        mid_gate = st.number_input("Mid stage gate (min contacts)", min_value=0, max_value=10, value=2, step=1)
+    with g3:
+        late_gate = st.number_input("Late stage gate (min contacts)", min_value=0, max_value=10, value=3, step=1)
+
+    # Filter only open buckets for gates
+    gates_df = opps[opps["Stage Bucket"].isin(["Early", "Mid", "Late"])].copy()
+
+    def meets_gate(row):
+        b = row["Stage Bucket"]
+        c = row["contact_count"]
+        if b == "Early":
+            return c >= early_gate
+        if b == "Mid":
+            return c >= mid_gate
+        if b == "Late":
+            return c >= late_gate
+        return False
+
+    if not gates_df.empty:
+        gates_df["Meets Gate"] = gates_df.apply(meets_gate, axis=1)
+
+        gate_roll = gates_df.groupby("Stage Bucket").agg(
+            Opps=("Opportunity ID", "nunique"),
+            Opps_Meeting_Gate=("Meets Gate", "sum"),
+            Pipeline=("Amount", "sum"),
+            Pipeline_Meeting_Gate=("Amount", lambda s: s[gates_df.loc[s.index, "Meets Gate"]].sum())
+        ).reindex(["Early", "Mid", "Late"]).fillna(0).reset_index()
+
+        gate_roll["Opp Coverage %"] = gate_roll.apply(
+            lambda r: r["Opps_Meeting_Gate"] / r["Opps"] if r["Opps"] > 0 else 0, axis=1
+        )
+        gate_roll["Pipeline Coverage %"] = gate_roll.apply(
+            lambda r: r["Pipeline_Meeting_Gate"] / r["Pipeline"] if r["Pipeline"] > 0 else 0, axis=1
+        )
+
+        display_gate = gate_roll.copy()
+        display_gate["Pipeline"] = display_gate["Pipeline"].map(fmt_money)
+        display_gate["Pipeline_Meeting_Gate"] = display_gate["Pipeline_Meeting_Gate"].map(fmt_money)
+        display_gate["Opp Coverage %"] = display_gate["Opp Coverage %"].map(lambda x: f"{x:.0%}")
+        display_gate["Pipeline Coverage %"] = display_gate["Pipeline Coverage %"].map(lambda x: f"{x:.0%}")
+        display_gate = display_gate.rename(columns={
+            "Stage Bucket": "Stage Bucket",
+            "Opps": "# Opps",
+            "Opps_Meeting_Gate": "# Opps meeting gate",
+            "Pipeline": "Pipeline",
+            "Pipeline_Meeting_Gate": "Pipeline meeting gate",
+            "Opp Coverage %": "Opp Coverage %",
+            "Pipeline Coverage %": "Pipeline Coverage %"
+        })
+
+        st.dataframe(display_gate, use_container_width=True, hide_index=True)
+
+        # Simple bars for Opp & Pipeline coverage %
+        cov_long = gate_roll.melt(
+            id_vars=["Stage Bucket"],
+            value_vars=["Opp Coverage %", "Pipeline Coverage %"],
+            var_name="Coverage Type",
+            value_name="Coverage"
+        )
+        cov_chart = alt.Chart(cov_long).mark_bar().encode(
+            x=alt.X("Stage Bucket:N", sort=["Early","Mid","Late"], title="Stage Bucket"),
+            y=alt.Y("Coverage:Q", axis=alt.Axis(format="%"), title="Coverage % meeting gate"),
+            color=alt.Color("Coverage Type:N", legend=alt.Legend(title="")),
+            tooltip=[
+                "Stage Bucket",
+                "Coverage Type",
+                alt.Tooltip("Coverage:Q", format=".0%")
+            ]
+        ).properties(height=220, title="Coverage vs Gates by Stage (Opps & Pipeline)")
+        st.altair_chart(cov_chart, use_container_width=True)
+    else:
+        st.info("No Early/Mid/Late opportunities found based on current stage mapping.")
+
+    section_end()
+
+    # ======================================================
     # BASIC SPLITS
+    # ======================================================
     total_opps = opps["Opportunity ID"].nunique()
     total_pipeline = opps["Amount"].sum()
     opps_with_cr_ids = set(roles["Opportunity ID"].dropna().unique())
@@ -617,23 +726,6 @@ if opps_file and roles_file:
     if not open_opps.empty:
         open_opps["age_days"] = (today - open_opps["Created Date"]).dt.days
     avg_age_open = open_opps["age_days"].dropna().mean() if "age_days" in open_opps else None
-
-    # Stage bucket helper
-    stage_lookup = opps.set_index("Opportunity ID")["Stage"].to_dict()
-
-    def stage_bucket_for_id(opp_id):
-        s = stage_lookup.get(opp_id, "")
-        if user_mapped_any:
-            if s in won_stages: return "Won"
-            if s in lost_stages: return "Lost"
-            if s in late_stages: return "Late"
-            if s in mid_stages: return "Mid"
-            if s in early_stages: return "Early"
-            return "Open"
-        sl = str(s).lower()
-        if "won" in sl: return "Won"
-        if "lost" in sl: return "Lost"
-        return "Open"
 
     # ======================================================
     # Buying Group Coverage Score
@@ -805,7 +897,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Owner Coverage Rollup (Coaching View) — FINAL FIX
+    # Owner Coverage Rollup (Coaching View)
     # ======================================================
     section_start("Owner Coverage Rollup (Coaching View)")
     st.caption(
@@ -855,7 +947,6 @@ if opps_file and roles_file:
             exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
 
             with st.expander(exp_title, expanded=False):
-                # ✅ Literal text, no markdown parsing, no "out of"
                 st.text(
                     f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline"
                 )
@@ -1113,7 +1204,6 @@ if opps_file and roles_file:
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     stage_cov_df = opps.copy()
-    stage_cov_df["Stage Bucket"] = stage_cov_df["Opportunity ID"].apply(stage_bucket_for_id)
     stage_cov_df["Coverage Bucket"] = stage_cov_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else "2+ roles")
     )
@@ -1140,7 +1230,9 @@ if opps_file and roles_file:
 
     section_end()
 
-    # ========== PDF charts (same 5) ==========
+    # ======================================================
+    # PDF charts (same 5)
+    # ======================================================
     pdf_chart_pngs = []
     fig1 = plt.figure(figsize=(7.2, 3.2))
     ax1 = fig1.add_subplot(111)
@@ -1247,11 +1339,20 @@ if opps_file and roles_file:
         for _, row in owner_roll.head(12).iterrows()
     ]
 
+    won_zero_bullets_for_pdf = []
+    if won_zero_count > 0:
+        for _, rr in won_zero_df.sort_values("Amount", ascending=False).head(15).iterrows():
+            won_zero_bullets_for_pdf.append(
+                f"{rr.get('Opportunity Name','(No name)')} (ID {rr.get('Opportunity ID','')}) — "
+                f"Owner: {rr.get('Opportunity Owner','')}, Stage: {rr.get('Stage','')}, "
+                f"Amount: ${rr.get('Amount',0):,.0f}"
+            )
+
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=bullets,
         chart_pngs=pdf_chart_pngs,
-        won_zero_rows=won_zero_bullets[:15] if won_zero_bullets else [],
+        won_zero_rows=won_zero_bullets_for_pdf,
         owner_bullets=owner_bullets_plain,
         priority_bullets=priority_bullets[:12] if 'priority_bullets' in locals() else []
     )
