@@ -552,17 +552,11 @@ if opps_file and roles_file:
     if user_mapped_any:
         won_mask = stage.isin(won_stages)
         lost_mask = stage.isin(lost_stages)
-        early_mask = stage.isin(early_stages)
-        mid_mask = stage.isin(mid_stages)
-        late_mask = stage.isin(late_stages)
         open_mask = ~(won_mask | lost_mask)
     else:
         won_mask = stage.str.contains("Won", case=False, na=False)
         lost_mask = stage.str.contains("Lost", case=False, na=False)
         open_mask = ~(won_mask | lost_mask)
-        early_mask = open_mask.copy()
-        mid_mask = open_mask.copy()
-        late_mask = open_mask.copy()
 
     # CONTACT COUNTS
     cr_counts = roles.groupby("Opportunity ID")["Contact ID"].nunique()
@@ -614,13 +608,11 @@ if opps_file and roles_file:
     avg_cr_won = won_opps["contact_count"].mean() if not won_opps.empty else 0
     avg_cr_open = open_opps["contact_count"].mean() if not open_opps.empty else 0
 
-    # Won with zero contacts (flagged)
     won_zero_df = won_opps[won_opps["contact_count"] == 0].copy()
     won_zero_count = won_zero_df["Opportunity ID"].nunique()
     won_zero_pipeline = won_zero_df["Amount"].sum()
     won_zero_pct = (won_zero_count / won_count) if won_count > 0 else 0
 
-    # DAYS CALCS
     def days_diff(row):
         if pd.isna(row["Created Date"]) or pd.isna(row["Close Date"]):
             return None
@@ -700,7 +692,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Stage Coverage Gates (MOVED HERE)
+    # Stage Coverage Gates (TABLE ONLY + COLORS)
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -746,12 +738,7 @@ if opps_file and roles_file:
             lambda r: r["Pipeline_Meeting_Gate"] / r["Pipeline"] if r["Pipeline"] > 0 else 0, axis=1
         )
 
-        display_gate = gate_roll.copy()
-        display_gate["Pipeline"] = display_gate["Pipeline"].map(fmt_money)
-        display_gate["Pipeline_Meeting_Gate"] = display_gate["Pipeline_Meeting_Gate"].map(fmt_money)
-        display_gate["Opp Coverage %"] = display_gate["Opp Coverage %"].map(lambda x: f"{x:.0%}")
-        display_gate["Pipeline Coverage %"] = display_gate["Pipeline Coverage %"].map(lambda x: f"{x:.0%}")
-        display_gate = display_gate.rename(columns={
+        display_gate = gate_roll.rename(columns={
             "Stage Bucket": "Stage Bucket",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
@@ -759,27 +746,33 @@ if opps_file and roles_file:
             "Pipeline_Meeting_Gate": "Pipeline meeting gate",
             "Opp Coverage %": "Opp Coverage %",
             "Pipeline Coverage %": "Pipeline Coverage %"
-        })
+        }).copy()
 
-        st.dataframe(display_gate, use_container_width=True, hide_index=True)
+        # Money formatting (keep % numeric for styling)
+        display_gate["Pipeline"] = display_gate["Pipeline"].map(fmt_money)
+        display_gate["Pipeline meeting gate"] = display_gate["Pipeline meeting gate"].map(fmt_money)
 
-        cov_long = gate_roll.melt(
-            id_vars=["Stage Bucket"],
-            value_vars=["Opp Coverage %", "Pipeline Coverage %"],
-            var_name="Coverage Type",
-            value_name="Coverage"
+        def color_cov(val):
+            try:
+                v = float(val)
+            except Exception:
+                return ""
+            if v >= 0.80:
+                return "background-color: #D1FAE5;"  # green
+            if 0.65 <= v < 0.80:
+                return "background-color: #FEF3C7;"  # orange
+            return "background-color: #FEE2E2;"      # light red
+
+        styled = (
+            display_gate.style
+            .applymap(color_cov, subset=["Opp Coverage %", "Pipeline Coverage %"])
+            .format({
+                "Opp Coverage %": "{:.0%}",
+                "Pipeline Coverage %": "{:.0%}"
+            })
         )
-        cov_chart = alt.Chart(cov_long).mark_bar().encode(
-            x=alt.X("Stage Bucket:N", sort=["Early","Mid","Late"], title="Stage Bucket"),
-            y=alt.Y("Coverage:Q", axis=alt.Axis(format="%"), title="Coverage % meeting gate"),
-            color=alt.Color("Coverage Type:N", legend=alt.Legend(title="")),
-            tooltip=[
-                "Stage Bucket",
-                "Coverage Type",
-                alt.Tooltip("Coverage:Q", format=".0%")
-            ]
-        ).properties(height=220, title="Coverage vs Gates by Stage (Opps & Pipeline)")
-        st.altair_chart(cov_chart, use_container_width=True)
+
+        st.dataframe(styled, use_container_width=True, hide_index=True)
     else:
         st.info("No Early/Mid/Late opportunities found based on current stage mapping.")
 
@@ -1050,11 +1043,9 @@ if opps_file and roles_file:
             st.markdown(f"• {b}")
 
         section_end()
-    else:
-        won_zero_bullets = []
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS
+    # INSIGHTS — 5 CHARTS (unchanged)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1121,8 +1112,6 @@ if opps_file and roles_file:
         use_container_width=True
     )
 
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
     open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
     open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else "2+ roles")
@@ -1138,8 +1127,6 @@ if opps_file and roles_file:
     ).properties(height=260, title="Open pipeline concentration by coverage (risk today)")
     st.altair_chart(donut, use_container_width=True)
 
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
     funnel_df = open_chart_df.copy()
     funnel_df["Coverage Funnel Bucket"] = funnel_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else ("2 roles" if n == 2 else "3+ roles"))
@@ -1153,10 +1140,7 @@ if opps_file and roles_file:
         x=alt.X("Open Opps:Q", title="# Open Opportunities"),
         tooltip=["Coverage Funnel Bucket", "Open Opps"]
     ).properties(height=220, title="Coverage funnel for open deals (where depth is missing)")
-
     st.altair_chart(funnel_chart, use_container_width=True)
-
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
     time_df = chart_df.copy()
     time_df["days_to_close"] = time_df.apply(days_diff, axis=1)
@@ -1199,8 +1183,6 @@ if opps_file and roles_file:
     ).properties(height=260, title="More contact roles correlates with faster closes")
     st.altair_chart(vel_chart, use_container_width=True)
 
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
     stage_cov_df = opps.copy()
     stage_cov_df["Coverage Bucket"] = stage_cov_df["contact_count"].apply(
         lambda n: "0 roles" if n == 0 else ("1 role" if n == 1 else "2+ roles")
@@ -1229,10 +1211,11 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF charts and download section unchanged...
+    # PDF CHARTS + DOWNLOAD (unchanged from your current working version)
     # ======================================================
-
-    # (keeping PDF/chart code exactly as in your previous file)
+    # NOTE: keep using your existing download block here.
+    # If you want Stage Coverage Gates added inside the PDF too,
+    # tell me and I’ll thread it into metrics_dict + PDF builder.
 
 else:
     st.info("Upload both CSV files above to generate insights.")
