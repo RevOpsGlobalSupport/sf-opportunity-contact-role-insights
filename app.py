@@ -157,6 +157,7 @@ def wilson_ci(k, n, z=1.96):
     return (max(0.0, center - margin), min(1.0, center + margin))
 
 
+# Seniority bucketing (kept for future use)
 def bucket_seniority(title: str) -> str:
     if not isinstance(title, str) or title.strip() == "":
         return "Other / Unknown"
@@ -189,6 +190,7 @@ def fetch_logo_bytes(url: str):
 
 
 def pdf_watermark_and_footer(c: canvas.Canvas, doc):
+    # watermark
     c.saveState()
     c.setFont("Helvetica-Bold", 50)
     c.setFillColor(colors.HexColor("#E6EAF0"))
@@ -197,6 +199,7 @@ def pdf_watermark_and_footer(c: canvas.Canvas, doc):
     c.drawCentredString(0, 0, "RevOps Global")
     c.restoreState()
 
+    # footer
     c.saveState()
     c.setFont("Helvetica", 9)
     c.setFillColor(colors.grey)
@@ -692,7 +695,8 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Stage Coverage Gates (TABLE ONLY + COLORS)
+    # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
+     # Won gate = Late gate, Lost gate = Mid gate
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -708,19 +712,23 @@ if opps_file and roles_file:
     with g3:
         late_gate = st.number_input("Late stage gate (min contacts)", min_value=0, max_value=10, value=3, step=1)
 
-    gates_df = opps[opps["Stage Bucket"].isin(["Early", "Mid", "Late"])].copy()
+    # include Early/Mid/Late/Won/Lost in gate eval
+    gates_df = opps[opps["Stage Bucket"].isin(["Early", "Mid", "Late", "Won", "Lost"])].copy()
+    gate_map = {
+        "Early": early_gate,
+        "Mid": mid_gate,
+        "Late": late_gate,
+        "Won": late_gate,   # same as Late
+        "Lost": mid_gate    # same as Mid
+    }
 
     def meets_gate(row):
         b = row["Stage Bucket"]
         c = row["contact_count"]
-        if b == "Early":
-            return c >= early_gate
-        if b == "Mid":
-            return c >= mid_gate
-        if b == "Late":
-            return c >= late_gate
-        return False
+        gate_val = gate_map.get(b, 0)
+        return c >= gate_val
 
+    gate_roll = None
     if not gates_df.empty:
         gates_df["Meets Gate"] = gates_df.apply(meets_gate, axis=1)
 
@@ -729,7 +737,7 @@ if opps_file and roles_file:
             Opps_Meeting_Gate=("Meets Gate", "sum"),
             Pipeline=("Amount", "sum"),
             Pipeline_Meeting_Gate=("Amount", lambda s: s[gates_df.loc[s.index, "Meets Gate"]].sum())
-        ).reindex(["Early", "Mid", "Late"]).fillna(0).reset_index()
+        ).reindex(["Early", "Mid", "Late", "Won", "Lost"]).fillna(0).reset_index()
 
         gate_roll["Opp Coverage %"] = gate_roll.apply(
             lambda r: r["Opps_Meeting_Gate"] / r["Opps"] if r["Opps"] > 0 else 0, axis=1
@@ -737,9 +745,11 @@ if opps_file and roles_file:
         gate_roll["Pipeline Coverage %"] = gate_roll.apply(
             lambda r: r["Pipeline_Meeting_Gate"] / r["Pipeline"] if r["Pipeline"] > 0 else 0, axis=1
         )
+        gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
 
         display_gate = gate_roll.rename(columns={
             "Stage Bucket": "Stage Bucket",
+            "Gate Value": "Gate (min contacts)",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
             "Pipeline": "Pipeline",
@@ -748,7 +758,6 @@ if opps_file and roles_file:
             "Pipeline Coverage %": "Pipeline Coverage %"
         }).copy()
 
-        # Money formatting (keep % numeric for styling)
         display_gate["Pipeline"] = display_gate["Pipeline"].map(fmt_money)
         display_gate["Pipeline meeting gate"] = display_gate["Pipeline meeting gate"].map(fmt_money)
 
@@ -774,7 +783,7 @@ if opps_file and roles_file:
 
         st.dataframe(styled, use_container_width=True, hide_index=True)
     else:
-        st.info("No Early/Mid/Late opportunities found based on current stage mapping.")
+        st.info("No opportunities found for stage buckets in current mapping.")
 
     section_end()
 
@@ -916,14 +925,14 @@ if opps_file and roles_file:
     )
     owner_roll = owner_roll.sort_values("pct_undercovered", ascending=False)
 
+    stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
+    owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
+
+    owner_bullets_pdf = []
+    shown = 0
     if owner_roll.empty:
         st.markdown("No open opportunities found for the selected filters.")
     else:
-        stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
-        owner_df["Stage Bucket"] = owner_df["Opportunity ID"].apply(stage_bucket_for_id)
-        owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
-
-        shown = 0
         for _, r in owner_roll.iterrows():
             open_opps_n = int(r["open_opps"])
             if open_opps_n == 0:
@@ -936,6 +945,10 @@ if opps_file and roles_file:
             under_pipe = float(r["undercovered_pipeline"])
 
             exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
+            owner_bullets_pdf.append(
+                f"{owner_name}: {pct_under:.0%} under-covered open opps ({under_n}/{open_opps_n}); "
+                f"pipeline at risk {fmt_money(under_pipe)} of {fmt_money(open_pipe)}."
+            )
 
             with st.expander(exp_title, expanded=False):
                 st.text(
@@ -954,7 +967,6 @@ if opps_file and roles_file:
                         ["Stage Bucket Rank", "Amount"],
                         ascending=[True, False]
                     )
-
                     display_cols = [
                         "Opportunity Name",
                         "Account ID",
@@ -968,7 +980,6 @@ if opps_file and roles_file:
                     })
                     rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
                     rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
-
                     st.dataframe(rep_table, use_container_width=True, hide_index=True)
 
                     st.caption(
@@ -993,11 +1004,8 @@ if opps_file and roles_file:
 
     priority_df = open_df[open_df["contact_count"] <= 1].copy()
     priority_df = priority_df[~priority_df["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
-    priority_df["Stage Bucket"] = priority_df["Opportunity ID"].apply(stage_bucket_for_id)
 
-    stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
     priority_df["Stage Bucket Rank"] = priority_df["Stage Bucket"].map(stage_priority_order).fillna(3)
-
     priority_df = priority_df.sort_values(
         ["Stage Bucket Rank", "Amount"],
         ascending=[True, False]
@@ -1022,8 +1030,9 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Won Opps with 0 Contact Roles — bullets red-flag
+    # Won Opps with 0 Contact Roles — red-flag bullets
     # ======================================================
+    won_zero_bullets = []
     if won_zero_count > 0:
         section_start("Won Opps with 0 Contact Roles (Red Flag)")
         st.caption(
@@ -1031,7 +1040,6 @@ if opps_file and roles_file:
             "Fixing this improves reporting accuracy and future forecasting."
         )
 
-        won_zero_bullets = []
         for _, rr in won_zero_df.sort_values("Amount", ascending=False).head(20).iterrows():
             won_zero_bullets.append(
                 f"{rr.get('Opportunity Name','(No name)')} (ID {rr.get('Opportunity ID','')}) — "
@@ -1045,7 +1053,7 @@ if opps_file and roles_file:
         section_end()
 
     # ======================================================
-    # INSIGHTS — 5 CHARTS (unchanged)
+    # INSIGHTS — CHARTS (same 5)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1211,11 +1219,127 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF CHARTS + DOWNLOAD (unchanged from your current working version)
+    # PDF EXPORT (includes Stage Gates + all sections)
     # ======================================================
-    # NOTE: keep using your existing download block here.
-    # If you want Stage Coverage Gates added inside the PDF too,
-    # tell me and I’ll thread it into metrics_dict + PDF builder.
+    st.markdown("---")
+    section_start("Download Full PDF Report")
+
+    # Metrics dictionary for PDF
+    metrics_dict = {
+        "Current Opportunity Insights": [
+            ["Total Opportunities", f"{total_opps:,}"],
+            ["Total Pipeline", fmt_money(total_pipeline)],
+            ["Current Win Rate", f"{win_rate:.1%}"],
+            ["Opps with Contact Roles", f"{opps_with_cr:,}"],
+            ["Opps without Contact Roles", f"{opps_without_cr:,}"],
+            ["Pipeline with Contact Roles", fmt_money(pipeline_with_cr)],
+            ["Pipeline without Contact Roles", fmt_money(pipeline_without_cr)],
+            ["Opps with only 1 Contact Role", f"{opps_one_cr:,}"],
+            ["Pipeline with only 1 Contact Role", fmt_money(pipeline_one_cr)],
+            ["Avg Contact Roles – Won", f"{avg_cr_won:.1f}"],
+            ["Avg Contact Roles – Lost", f"{avg_cr_lost:.1f}"],
+            ["Avg Contact Roles – Open", f"{avg_cr_open:.1f}"],
+            ["Avg days to close – Won", f"{avg_days_won:.0f} days" if avg_days_won else "0 days"],
+            ["Avg days to close – Lost", f"{avg_days_lost:.0f} days" if avg_days_lost else "0 days"],
+            ["Avg age of Open opps", f"{avg_age_open:.0f} days" if avg_age_open else "0 days"],
+        ],
+        "Pipeline at Risk": [
+            ["Open Pipeline at Risk (0–1 roles)", fmt_money(open_pipeline_risk)],
+            ["% of Open Opps Missing Contacts", f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})"],
+        ],
+        "Simulator — Target Contact Coverage": [
+            ["Target Avg Contacts (Open)", f"{target_contacts:.1f}"],
+            ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%}"],
+            ["Incremental Won Pipeline (modeled)", fmt_money(incremental_won_pipeline)],
+        ],
+    }
+
+    # Add Stage Gates to PDF metrics
+    if gate_roll is not None:
+        gate_rows_pdf = []
+        for _, rr in gate_roll.iterrows():
+            bucket = rr["Stage Bucket"]
+            gate_val = int(rr["Gate Value"])
+            opp_cov = rr["Opp Coverage %"]
+            pipe_cov = rr["Pipeline Coverage %"]
+            opp_meet = int(rr["Opps_Meeting_Gate"])
+            opp_tot = int(rr["Opps"])
+            pipe_meet = rr["Pipeline_Meeting_Gate"]
+            pipe_tot = rr["Pipeline"]
+            gate_rows_pdf.append([
+                f"{bucket} Opp Coverage % (gate {gate_val})",
+                f"{opp_cov:.0%} ({opp_meet}/{opp_tot})"
+            ])
+            gate_rows_pdf.append([
+                f"{bucket} Pipeline Coverage % (gate {gate_val})",
+                f"{pipe_cov:.0%} ({fmt_money(pipe_meet)} / {fmt_money(pipe_tot)})"
+            ])
+        metrics_dict["Stage Coverage Gates"] = gate_rows_pdf
+
+    # Build matplotlib charts for PDF
+    chart_pngs = []
+
+    # Chart 1: Win rate by contact bucket
+    fig1, ax1 = plt.subplots(figsize=(7, 3.2))
+    ax1.plot(winrate_bucket["Winrate Bucket"], winrate_bucket["Win Rate"], marker="o")
+    ax1.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax1.set_title("Win rate by Contact Roles")
+    ax1.set_xlabel("Contact Roles per Opportunity")
+    ax1.set_ylabel("Win Rate")
+    chart_pngs.append(fig_to_png_bytes(fig1))
+
+    # Chart 2: Open pipeline by coverage bucket
+    fig2, ax2 = plt.subplots(figsize=(7, 3.2))
+    ax2.bar(open_pipeline_bucket["Open Coverage Bucket"], open_pipeline_bucket["Open Pipeline"])
+    ax2.set_title("Open Pipeline by Coverage Bucket")
+    ax2.set_xlabel("Coverage Bucket")
+    ax2.set_ylabel("Pipeline ($)")
+    chart_pngs.append(fig_to_png_bytes(fig2))
+
+    # Chart 3: Coverage funnel
+    fig3, ax3 = plt.subplots(figsize=(7, 3.2))
+    ax3.barh(funnel_counts["Coverage Funnel Bucket"], funnel_counts["Open Opps"])
+    ax3.set_title("Open Opportunities Coverage Funnel")
+    ax3.set_xlabel("# Open Opps")
+    chart_pngs.append(fig_to_png_bytes(fig3))
+
+    # Chart 4: Velocity line
+    fig4, ax4 = plt.subplots(figsize=(7, 3.2))
+    for sg in avg_days_bucket["Stage Group"].unique():
+        sub = avg_days_bucket[avg_days_bucket["Stage Group"] == sg]
+        ax4.plot(sub["Contact Bucket"], sub["Avg Days"], marker="o", label=sg)
+    ax4.set_title("Time to Close vs Contact Roles")
+    ax4.set_xlabel("Contact Roles Bucket")
+    ax4.set_ylabel("Avg Days")
+    ax4.legend()
+    chart_pngs.append(fig_to_png_bytes(fig4))
+
+    # Chart 5: Heatmap proxy (simple bar by stage for PDF)
+    fig5, ax5 = plt.subplots(figsize=(7, 3.2))
+    stage_health = heat_counts.groupby("Stage Bucket")["Pct"].mean().reindex(["Early","Mid","Late","Open"]).fillna(0)
+    ax5.bar(stage_health.index, stage_health.values)
+    ax5.yaxis.set_major_formatter(PercentFormatter(1.0))
+    ax5.set_title("Avg Coverage Health by Stage Bucket")
+    ax5.set_ylabel("% with 2+ roles")
+    chart_pngs.append(fig_to_png_bytes(fig5))
+
+    pdf_bytes = build_pdf_report(
+        metrics_dict=metrics_dict,
+        bullets=[re.sub(r"\*\*(.*?)\*\*", r"\1", b) for b in bullets],
+        chart_pngs=chart_pngs,
+        won_zero_rows=won_zero_bullets,
+        owner_bullets=owner_bullets_pdf,
+        priority_bullets=priority_bullets
+    )
+
+    st.download_button(
+        "⬇️ Download PDF (Branded Report)",
+        data=pdf_bytes,
+        file_name="RevOps_Global_CRM_ContactRole_Insights.pdf",
+        mime="application/pdf"
+    )
+
+    section_end()
 
 else:
     st.info("Upload both CSV files above to generate insights.")
