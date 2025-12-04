@@ -669,11 +669,21 @@ if opps_file and roles_file:
         f"Current win rate is **{win_rate:.1%}**. Won deals average **{avg_cr_won:.1f}** contact roles vs Lost at **{avg_cr_lost:.1f}**, "
         "showing strong correlation between buying-group depth and conversion."
     )
-    if avg_cr_open < max(avg_cr_won, 2.0):
+
+    # FIXED benchmark logic:
+    # pick a benchmark that is ALWAYS higher than open avg
+    target_open_contacts = None
+    if avg_cr_won > avg_cr_open:
+        target_open_contacts = avg_cr_won
+    elif 2.0 > avg_cr_open:
+        target_open_contacts = 2.0
+
+    if target_open_contacts is not None:
         bullets.append(
-            f"Open opportunities average **{avg_cr_open:.1f}** contact roles. Increasing this towards **at least 2.0** "
+            f"Open opportunities average **{avg_cr_open:.1f}** contact roles. Increasing this towards **at least {target_open_contacts:.1f}** "
             "contacts per opportunity would align open deals with won buying-group patterns."
         )
+
     open_pipeline = open_df["Amount"].sum() if not open_df.empty else 0
     open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
     open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
@@ -1030,13 +1040,44 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
+    # Next Best Actions / Playbooks  (NEW)
+    # ======================================================
+    section_start("Next Best Actions to Improve Buying-Group Coverage")
+    st.caption(
+        "Use these plays to close coverage gaps shown above. These are directional and should be adapted to your GTM motion."
+    )
+
+    st.markdown("**Sales Plays**")
+    st.markdown(
+        "- Map stakeholders in LinkedIn Navigator and add likely influencers/champions to the opportunity.\n"
+        "- Multi-thread key accounts: ensure economic buyer + champion + technical evaluator are all present.\n"
+        "- For late-stage deals, confirm procurement / legal / security contacts are captured as roles."
+    )
+
+    st.markdown("**RevOps Plays**")
+    st.markdown(
+        "- Add stage-based contact role gates: require minimum contacts before moving to Mid/Late stages.\n"
+        "- Create simple CRM prompts/validation rules to flag deals with 0–1 contacts.\n"
+        "- Automate association from account contacts to opportunities where possible."
+    )
+
+    st.markdown("**Marketing Plays**")
+    st.markdown(
+        "- Run persona-based air-cover campaigns to accounts with under-covered pipeline.\n"
+        "- Use intent + engagement signals to surface missing stakeholders for sellers.\n"
+        "- Align nurture to buying-group gaps (ex: no technical evaluator → send technical proof points)."
+    )
+
+    section_end()
+
+    # ======================================================
     # Won Opps with 0 Contact Roles — red-flag bullets
     # ======================================================
     won_zero_bullets = []
     if won_zero_count > 0:
-        section_start("Won Opps with 0 Contact Roles (Red Flag)")
+        section_start("Won Opps with 0 Contact Roles")
         st.caption(
-            "These won deals are missing buying-group contacts in the CRM. "
+            "🚩 These won deals are missing buying-group contacts in the CRM. "
             "Fixing this improves reporting accuracy and future forecasting."
         )
 
@@ -1053,7 +1094,7 @@ if opps_file and roles_file:
         section_end()
 
     # ======================================================
-    # INSIGHTS — CHARTS (same 5)
+    # INSIGHTS — CHARTS (same 5 + win-rate clarity improvements)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1103,7 +1144,7 @@ if opps_file and roles_file:
         y=alt.Y("CI Low:Q", axis=alt.Axis(format="%"), title="Win Rate"),
         y2="CI High:Q"
     )
-    line_wr = alt.Chart(winrate_bucket).mark_line(point=True, strokeWidth=3).encode(
+    line_wr = alt.Chart(winrate_bucket).mark_line(point=True, strokeWidth=4).encode(
         x=alt.X("Winrate Bucket:N", sort=win_bucket_order),
         y=alt.Y("Win Rate:Q", axis=alt.Axis(format="%")),
         tooltip=[
@@ -1113,12 +1154,16 @@ if opps_file and roles_file:
         ]
     )
 
-    st.altair_chart(
+    winrate_chart = (
         alt.layer(bars_n, band_ci, line_wr)
         .resolve_scale(y='independent')
-        .properties(height=280, title="Win rate improves sharply after 2+ contact roles"),
-        use_container_width=True
+        .properties(height=320, title="Win rate improves sharply after 2+ contact roles")
+        .configure_axis(labelFontSize=13, titleFontSize=14)
+        .configure_title(fontSize=16)
+        .configure_legend(labelFontSize=12, titleFontSize=12)
     )
+
+    st.altair_chart(winrate_chart, use_container_width=True)
 
     open_chart_df = chart_df[chart_df["Stage Group"] == "Open"].copy()
     open_chart_df["Open Coverage Bucket"] = open_chart_df["contact_count"].apply(
