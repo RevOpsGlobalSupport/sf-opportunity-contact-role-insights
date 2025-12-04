@@ -219,7 +219,7 @@ def fig_to_png_bytes(fig):
 def build_pdf_report(
     metrics_dict,
     bullets,
-    recommended_enhancements,   # NEW
+    recommended_enhancements,
     chart_pngs,
     won_zero_rows,
     owner_bullets,
@@ -281,13 +281,18 @@ def build_pdf_report(
         story.append(Paragraph(f"• {html.escape(b)}", styles["Body"]))
     story.append(Spacer(1, 0.12*inch))
 
-    # NEW — Recommended Enhancements in PDF
     story.append(Paragraph("Recommended Enhancements", styles["H2"]))
     if recommended_enhancements:
         for r in recommended_enhancements:
-            story.append(Paragraph(f"• {html.escape(r)}", styles["Body"]))
+            # r already formatted with line breaks using \n\n.
+            safe_r = html.escape(r).replace("\n", "<br/>")
+            story.append(Paragraph(f"• {safe_r}", styles["Body"]))
+            story.append(Spacer(1, 0.04*inch))
     else:
-        story.append(Paragraph("• Coverage looks healthy relative to won patterns. Maintain current gates and coaching rhythm.", styles["Body"]))
+        story.append(Paragraph(
+            "• Coverage looks healthy relative to won patterns. Maintain current gates and coaching rhythm.",
+            styles["Body"]
+        ))
     story.append(Spacer(1, 0.12*inch))
 
     if won_zero_rows:
@@ -416,9 +421,18 @@ st.markdown("""
   border:1px solid #e5e7eb;
   border-radius:10px;
   padding:10px 12px;
-  margin:8px 0;
+  margin:10px 0;
   font-size:15px;
-  line-height:1.5;
+  line-height:1.55;
+}
+.reco-title{
+  font-weight:800;
+  margin-bottom:6px;
+}
+.reco-detail{
+  font-size:14px;
+  color:#111827;
+  margin:2px 0;
 }
 .reco-chip{
   display:inline-block;
@@ -699,13 +713,13 @@ if opps_file and roles_file:
         f"Current win rate is **{win_rate:.1%}**. Won deals average **{avg_cr_won:.1f}** contact roles vs Lost at **{avg_cr_lost:.1f}**, "
         "showing strong correlation between buying-group depth and conversion."
     )
-    # Ensure benchmark always higher than current avg open roles
-    open_benchmark_target = max(2.0, avg_cr_won)  # use Won average if higher
+    open_benchmark_target = max(2.0, avg_cr_won)
     if avg_cr_open < open_benchmark_target:
         bullets.append(
             f"Open opportunities average **{avg_cr_open:.1f}** contact roles. Increasing this towards **at least {open_benchmark_target:.1f}** "
             "contacts per opportunity would align open deals with won buying-group patterns."
         )
+
     open_pipeline = open_df["Amount"].sum() if not open_df.empty else 0
     open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
     open_opps_risk = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() if not open_df.empty else 0
@@ -727,7 +741,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Recommended Enhancements (NEW — dynamic, expanded)
+    # Recommended Enhancements (Expanded + always-on ROG point)
     # ======================================================
     pct_1_or_less_open = (
         open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() / open_opps_total
@@ -746,77 +760,131 @@ if opps_file and roles_file:
             open_df["Stage Bucket"].isin(["Late", "Mid"]) & (open_df["contact_count"] <= 1)
         ]["Opportunity ID"].nunique()
 
-    weakest_gate_cov = None
-    gate_roll = None  # will be built in Stage Coverage Gates section
-
     pct_opps_without_roles = opps_without_cr / max(total_opps, 1)
 
     enhancements_library = [
+        # Always-on RevOps Global automation point
+        {
+            "tag": "RevOps Global SF Solution",
+            "priority": "High",
+            "condition": lambda: True,  # ALWAYS shown
+            "title": "Automate Opportunity–Contact Role Association",
+            "details": [
+                "Fix: Many deals are missing stakeholders because manual role logging is inconsistent.",
+                "How: Deploy RevOps Global’s Salesforce automation to auto-suggest Account contacts on opp creation and auto-sync roles as emails/meetings occur.",
+                "Next step: Enable the package, map your key personas, and set stage-based auto-association rules."
+            ],
+        },
+
         {
             "tag": "Sales",
             "priority": "High",
             "condition": lambda: pct_1_or_less_open >= 0.30,
-            "text": "Run a 2–3 week multi-threading sprint on open deals with 0–1 roles. Reps must identify and log a Champion + Economic Buyer + Evaluator for every active deal."
+            "title": "Launch a Multi-Threading Sprint on Under-Covered Open Deals",
+            "details": [
+                "Fix: A large share of open deals have 0–1 roles, which behave like Lost deals.",
+                "How: Reps must add at least a Champion + Economic Buyer + Evaluator; enforce via weekly pipeline inspections.",
+                "Next step: Use the ‘Top Open Opportunities to Fix First’ list to assign owners and deadlines this week."
+            ],
         },
         {
             "tag": "Enablement",
             "priority": "High",
             "condition": lambda: open_won_gap >= 1.0,
-            "text": "Introduce a buying-group playbook by stage. Teach reps to map stakeholders earlier so Open deals converge toward Won patterns (Champion → EB → Tech Eval → Procurement)."
+            "title": "Roll Out a Stage-Based Buying Group Playbook",
+            "details": [
+                "Fix: Open deals are not keeping pace with Won buying-group depth.",
+                "How: Define required personas per stage (Early→Champion, Mid→EB+Tech Eval, Late→Procurement/Legal).",
+                "Next step: Convert these into rep checklists or call-scorecards and review adherence in 1:1s."
+            ],
         },
         {
             "tag": "Sales Leadership",
             "priority": "High",
             "condition": lambda: late_mid_undercovered_n >= max(3, open_opps_total * 0.10),
-            "text": "Escalate Late/Mid open deals with ≤1 role into exec/manager review. These are statistically closest to Lost outcomes and need rapid stakeholder expansion."
+            "title": "Escalate Late/Mid Deals with ≤1 Role into Manager Review",
+            "details": [
+                "Fix: Late/Mid under-covered deals are immediate forecast risk.",
+                "How: Require a stakeholder expansion plan before next-step approval (who’s missing, how to access them, by when).",
+                "Next step: Managers pull these deals into a weekly ‘coverage red flag’ huddle until fixed."
+            ],
         },
         {
             "tag": "Data Hygiene",
             "priority": "High",
             "condition": lambda: won_zero_count >= max(3, won_count * 0.05),
-            "text": "Backfill missing roles on Won deals. Add a close checklist requiring ≥1 contact role to improve attribution + future coverage benchmarks."
+            "title": "Backfill Missing Roles on Won Deals",
+            "details": [
+                "Fix: Won deals with 0 roles distort benchmarks and ROI attribution.",
+                "How: RevOps runs a backfill campaign using closed-won notes, emails, and participants to tag roles retroactively.",
+                "Next step: Add a close checklist blocking Won status if role count = 0."
+            ],
         },
         {
             "tag": "RevOps",
             "priority": "High",
             "condition": lambda: pct_0_open >= 0.12,
-            "text": "Add a CRM validation rule: opportunities cannot move forward if contact roles = 0. Zero-coverage open deals are a leading indicator of loss."
-        },
-        {
-            "tag": "RevOps Global SF Solution",
-            "priority": "High",
-            "condition": lambda: pct_opps_without_roles >= 0.15 or pct_0_open >= 0.10,
-            "text": "Automate opportunity–contact role association using RevOps Global’s Salesforce Solution. Auto-suggest relevant Account contacts when an opp is created and sync roles as stakeholders engage."
+            "title": "Prevent Stage Advancement When Coverage = 0",
+            "details": [
+                "Fix: Zero-contact opportunities are a leading indicator of loss and poor CRM hygiene.",
+                "How: Add validation rules or path warnings requiring ≥1 role before moving beyond Early/Mid stages.",
+                "Next step: Pilot in one team first, then roll out org-wide after 2–3 weeks."
+            ],
         },
         {
             "tag": "Marketing Ops",
             "priority": "Medium",
             "condition": lambda: pct_1_or_less_open >= 0.20 and open_pipeline_risk > 0,
-            "text": "Trigger ABM air-cover to under-covered accounts. Use persona targeting + intent to surface missing stakeholders and feed reps warm intros."
+            "title": "Trigger ABM Air-Cover on Under-Covered Accounts",
+            "details": [
+                "Fix: Missing evaluators/influencers slows decision cycles and lowers win rate.",
+                "How: Run persona-based ads + intent outreach to surface new stakeholders for reps.",
+                "Next step: Route engaged contacts into Salesforce and auto-associate to the active opp."
+            ],
         },
         {
             "tag": "RevOps",
             "priority": "Medium",
             "condition": lambda: pct_2plus_open_local < 0.55,
-            "text": "Update forecasting / pipeline inspection to include contact-coverage as a risk dimension. Flag deals with <2 roles as ‘at-risk’ in rollups."
+            "title": "Add Contact-Coverage as a Forecast Risk Dimension",
+            "details": [
+                "Fix: Forecast rollups miss buying-group weakness until it’s too late.",
+                "How: Flag deals with <2 roles as ‘at-risk’ and report by stage + owner weekly.",
+                "Next step: Add this metric to forecast calls and QBR dashboards."
+            ],
         },
         {
             "tag": "Enablement",
             "priority": "Medium",
             "condition": lambda: lost_vs_won_contact_gap >= 1.5,
-            "text": "Lost deals have far fewer roles than Won. Add coaching on stakeholder mapping and objection handling for missing personas."
+            "title": "Coach to Close the Lost vs Won Buying-Group Gap",
+            "details": [
+                "Fix: Lost deals show a large stakeholder depth deficit vs Won.",
+                "How: Train reps to map decision process early and multi-thread objections by persona.",
+                "Next step: Run deal reviews focused on ‘who’s missing and why’ using real Lost examples."
+            ],
         },
         {
             "tag": "Marketing",
             "priority": "Low",
             "condition": lambda: pct_2plus_open_local < 0.45,
-            "text": "Deploy stakeholder-capture forms (webinars, events, gated assets) tied to active opportunities to systematically add evaluators and influencers."
+            "title": "Systematically Capture Missing Stakeholders via Programs",
+            "details": [
+                "Fix: Open deals aren’t broadening beyond initial contacts.",
+                "How: Use webinars, workshops, and gated assets to bring in evaluators and influencers.",
+                "Next step: Ensure campaign forms collect role/persona and sync to CRM."
+            ],
         },
         {
             "tag": "Sales",
             "priority": "Low",
             "condition": lambda: avg_cr_open >= 2.0 and pct_1_or_less_open < 0.15,
-            "text": "Coverage is healthy overall. Focus next on role quality: verify Champion strength and Economic Buyer alignment on top-value open deals."
+            "title": "Shift from Coverage Quantity to Coverage Quality",
+            "details": [
+                "Fix: Overall coverage is healthy, but roles may not be the right ones.",
+                "How: Validate Champion strength, EB alignment, and procurement timing on top deals.",
+                "Next step: Require reps to label ‘primary buying role’ + confidence level per opp."
+            ],
         },
     ]
 
@@ -834,13 +902,18 @@ if opps_file and roles_file:
         key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"])
     )
 
-    # Plain-text list for PDF
-    relevant_enhancements_pdf = [f"[{e['priority']} — {e['tag']}] {e['text']}" for e in relevant_enhancements]
+    # Expanded text for PDF (multi-line)
+    relevant_enhancements_pdf = []
+    for e in relevant_enhancements:
+        block = f"[{e['priority']} — {e['tag']}] {e['title']}\n"
+        for d in e.get("details", []):
+            block += f"- {d}\n"
+        relevant_enhancements_pdf.append(block.strip())
 
     section_start("Recommended Enhancements")
     st.caption(
         "These recommendations are generated from your coverage patterns above. "
-        "Only enhancements relevant to your data are shown."
+        "Each one includes what to fix, how to fix it, and the next step."
     )
 
     if not relevant_enhancements:
@@ -849,9 +922,12 @@ if opps_file and roles_file:
         for e in relevant_enhancements:
             st.markdown(
                 f"<div class='reco-item'>"
+                f"<div class='reco-title'>"
                 f"<span class='reco-chip'>{e['priority']}</span>"
                 f"<span class='reco-chip'>{e['tag']}</span>"
-                f"{html.escape(e['text'])}"
+                f"{html.escape(e['title'])}"
+                f"</div>"
+                + "".join([f"<div class='reco-detail'>• {html.escape(d)}</div>" for d in e.get("details", [])]) +
                 f"</div>",
                 unsafe_allow_html=True
             )
@@ -891,6 +967,7 @@ if opps_file and roles_file:
         gate_val = gate_map.get(b, 0)
         return c >= gate_val
 
+    gate_roll = None
     if not gates_df.empty:
         gates_df["Meets Gate"] = gates_df.apply(meets_gate, axis=1)
 
@@ -908,8 +985,6 @@ if opps_file and roles_file:
             lambda r: r["Pipeline_Meeting_Gate"] / r["Pipeline"] if r["Pipeline"] > 0 else 0, axis=1
         )
         gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
-
-        weakest_gate_cov = float(gate_roll["Opp Coverage %"].min()) if not gate_roll.empty else None
 
         display_gate = gate_roll.rename(columns={
             "Stage Bucket": "Stage Bucket",
@@ -1217,7 +1292,7 @@ if opps_file and roles_file:
         section_end()
 
     # ======================================================
-    # INSIGHTS — CHARTS
+    # INSIGHTS — CHARTS (same 5)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1383,7 +1458,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF EXPORT (includes Stage Gates + Enhancements + all sections)
+    # PDF EXPORT
     # ======================================================
     st.markdown("---")
     section_start("Download Full PDF Report")
@@ -1482,7 +1557,7 @@ if opps_file and roles_file:
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=[re.sub(r"\*\*(.*?)\*\*", r"\1", b) for b in bullets],
-        recommended_enhancements=relevant_enhancements_pdf,  # NEW
+        recommended_enhancements=relevant_enhancements_pdf,
         chart_pngs=chart_pngs,
         won_zero_rows=won_zero_bullets,
         owner_bullets=owner_bullets_pdf,
@@ -1495,7 +1570,6 @@ if opps_file and roles_file:
         file_name="RevOps_Global_CRM_ContactRole_Insights.pdf",
         mime="application/pdf"
     )
-
     section_end()
 
 else:
