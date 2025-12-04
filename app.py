@@ -400,6 +400,21 @@ st.markdown("""
   border-radius:8px;
   display:inline-block;
 }
+.reco-chip{
+  display:inline-block;
+  padding:3px 8px;
+  font-size:12px;
+  font-weight:700;
+  border-radius:999px;
+  margin-right:6px;
+  background:#E0E7FF;
+  color:#1E3A8A;
+}
+.reco-item{
+  font-size:16px;
+  line-height:1.6;
+  margin:6px 0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -670,8 +685,7 @@ if opps_file and roles_file:
         "showing strong correlation between buying-group depth and conversion."
     )
 
-    # FIXED benchmark logic:
-    # pick a benchmark that is ALWAYS higher than open avg
+    # benchmark logic: ALWAYS higher than open avg
     target_open_contacts = None
     if avg_cr_won > avg_cr_open:
         target_open_contacts = avg_cr_won
@@ -705,8 +719,143 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
+    # Recommended Enhancements (NEW — dynamic)
+    # ======================================================
+    # Scenario signals
+    pct_1_or_less_open = open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() / open_opps_total if open_opps_total > 0 else 0
+    pct_0_open = pct_zero_open
+    pct_2plus_open_local = pct_2plus_open
+    open_won_gap = avg_cr_won - avg_cr_open if (avg_cr_won is not None and avg_cr_open is not None) else 0
+
+    # Avoid division pitfalls
+    won_lost_total = (won_count + lost_count)
+    lost_vs_won_contact_gap = (avg_cr_won - avg_cr_lost) if (avg_cr_won is not None and avg_cr_lost is not None) else 0
+
+    enhancements_library = [
+        # Coverage depth improvements
+        {
+            "tag": "Sales",
+            "priority": "High",
+            "condition": lambda: pct_1_or_less_open >= 0.35,
+            "text": "Run a 2-week ‘multi-thread sprint’ on open deals with 0–1 roles. Require reps to add champion + economic buyer + evaluator in every active opportunity."
+        },
+        {
+            "tag": "RevOps",
+            "priority": "High",
+            "condition": lambda: pct_0_open >= 0.15,
+            "text": "Add a CRM validation rule: opportunities cannot move stages if contact roles = 0. This directly attacks the zero-coverage gap."
+        },
+        {
+            "tag": "RevOps",
+            "priority": "High",
+            "condition": lambda: open_won_gap >= 1.0,
+            "text": "Create stage-based buying-group gates (Early=1, Mid=2, Late=3+) and enforce via pipeline inspection + automation."
+        },
+        {
+            "tag": "Marketing",
+            "priority": "Medium",
+            "condition": lambda: pct_2plus_open_local < 0.55,
+            "text": "Launch persona air-cover to accounts with under-covered open pipeline. Use intent + engagement to surface missing stakeholders."
+        },
+
+        # Hygiene / data quality
+        {
+            "tag": "Data Hygiene",
+            "priority": "High",
+            "condition": lambda: won_zero_count >= max(3, won_count * 0.05),
+            "text": "Backfill missing roles on Won deals (critical for attribution + forecasting). Add a ‘Won requires 1+ roles’ close checklist."
+        },
+        {
+            "tag": "RevOps",
+            "priority": "Medium",
+            "condition": lambda: opps_without_cr / max(total_opps, 1) >= 0.20,
+            "text": "Automate association between Account contacts and Opportunities (auto-suggest contacts when opp is created)."
+        },
+
+        # Rep coaching patterns
+        {
+            "tag": "Sales Leadership",
+            "priority": "Medium",
+            "condition": lambda: pct_1_or_less_open >= 0.20 and score < 70,
+            "text": "Coach reps weekly using the Owner Coverage Rollup. Make ‘contact depth’ a first-class deal-review requirement."
+        },
+
+        # Velocity / cycle-time signals
+        {
+            "tag": "Sales",
+            "priority": "Medium",
+            "condition": lambda: (avg_days_won is not None and avg_days_lost is not None and avg_days_won > avg_days_lost * 1.25),
+            "text": "Won deals are taking longer than Lost; add buying-group discovery earlier to avoid late-stage stakeholder surprises."
+        },
+
+        # Closed-won vs lost disparity
+        {
+            "tag": "Enablement",
+            "priority": "Medium",
+            "condition": lambda: lost_vs_won_contact_gap >= 1.5,
+            "text": "Enablement play: train reps to identify and log the 4 core roles (Champion, Economic Buyer, Technical Eval, Procurement)."
+        },
+
+        # Stage gate execution issues
+        {
+            "tag": "RevOps",
+            "priority": "Medium",
+            "condition": lambda: gate_roll is not None and (gate_roll["Opp Coverage %"].min() < 0.65),
+            "text": "Gate compliance below 65% in at least one stage bucket. Add ‘no-go’ rules for stage advancement and monitor weekly."
+        },
+
+        # Late-stage risk
+        {
+            "tag": "Sales",
+            "priority": "High",
+            "condition": lambda: (
+                not open_df.empty and
+                open_df[open_df["Stage Bucket"].isin(["Late", "Mid"]) & (open_df["contact_count"] <= 1)]["Opportunity ID"].nunique()
+                >= 3
+            ),
+            "text": "Late/Mid-stage deals with ≤1 role are at acute risk. Prioritize these in multi-threading and exec outreach."
+        }
+    ]
+
+    # Evaluate library
+    relevant_enhancements = []
+    for e in enhancements_library:
+        try:
+            if e["condition"]():
+                relevant_enhancements.append(e)
+        except Exception:
+            continue
+
+    # Sort by priority (High first) then tag
+    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
+    relevant_enhancements = sorted(
+        relevant_enhancements,
+        key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"])
+    )
+
+    section_start("Recommended Enhancements")
+    st.caption(
+        "These recommendations are automatically generated from your coverage patterns above. "
+        "Only enhancements relevant to your data are shown."
+    )
+
+    if not relevant_enhancements:
+        st.markdown("✅ Coverage looks healthy relative to won patterns. Keep current gates and coaching rhythm.")
+    else:
+        for e in relevant_enhancements:
+            st.markdown(
+                f"<div class='reco-item'>"
+                f"<span class='reco-chip'>{e['priority']}</span>"
+                f"<span class='reco-chip'>{e['tag']}</span>"
+                f"{html.escape(e['text'])}"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+    section_end()
+
+    # ======================================================
     # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
-     # Won gate = Late gate, Lost gate = Mid gate
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -722,14 +871,13 @@ if opps_file and roles_file:
     with g3:
         late_gate = st.number_input("Late stage gate (min contacts)", min_value=0, max_value=10, value=3, step=1)
 
-    # include Early/Mid/Late/Won/Lost in gate eval
     gates_df = opps[opps["Stage Bucket"].isin(["Early", "Mid", "Late", "Won", "Lost"])].copy()
     gate_map = {
         "Early": early_gate,
         "Mid": mid_gate,
         "Late": late_gate,
-        "Won": late_gate,   # same as Late
-        "Lost": mid_gate    # same as Mid
+        "Won": late_gate,
+        "Lost": mid_gate
     }
 
     def meets_gate(row):
@@ -758,7 +906,6 @@ if opps_file and roles_file:
         gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
 
         display_gate = gate_roll.rename(columns={
-            "Stage Bucket": "Stage Bucket",
             "Gate Value": "Gate (min contacts)",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
@@ -777,10 +924,10 @@ if opps_file and roles_file:
             except Exception:
                 return ""
             if v >= 0.80:
-                return "background-color: #D1FAE5;"  # green
+                return "background-color: #D1FAE5;"
             if 0.65 <= v < 0.80:
-                return "background-color: #FEF3C7;"  # orange
-            return "background-color: #FEE2E2;"      # light red
+                return "background-color: #FEF3C7;"
+            return "background-color: #FEE2E2;"
 
         styled = (
             display_gate.style
@@ -1040,37 +1187,6 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Next Best Actions / Playbooks  (NEW)
-    # ======================================================
-    section_start("Next Best Actions to Improve Buying-Group Coverage")
-    st.caption(
-        "Use these plays to close coverage gaps shown above. These are directional and should be adapted to your GTM motion."
-    )
-
-    st.markdown("**Sales Plays**")
-    st.markdown(
-        "- Map stakeholders in LinkedIn Navigator and add likely influencers/champions to the opportunity.\n"
-        "- Multi-thread key accounts: ensure economic buyer + champion + technical evaluator are all present.\n"
-        "- For late-stage deals, confirm procurement / legal / security contacts are captured as roles."
-    )
-
-    st.markdown("**RevOps Plays**")
-    st.markdown(
-        "- Add stage-based contact role gates: require minimum contacts before moving to Mid/Late stages.\n"
-        "- Create simple CRM prompts/validation rules to flag deals with 0–1 contacts.\n"
-        "- Automate association from account contacts to opportunities where possible."
-    )
-
-    st.markdown("**Marketing Plays**")
-    st.markdown(
-        "- Run persona-based air-cover campaigns to accounts with under-covered pipeline.\n"
-        "- Use intent + engagement signals to surface missing stakeholders for sellers.\n"
-        "- Align nurture to buying-group gaps (ex: no technical evaluator → send technical proof points)."
-    )
-
-    section_end()
-
-    # ======================================================
     # Won Opps with 0 Contact Roles — red-flag bullets
     # ======================================================
     won_zero_bullets = []
@@ -1094,7 +1210,7 @@ if opps_file and roles_file:
         section_end()
 
     # ======================================================
-    # INSIGHTS — CHARTS (same 5 + win-rate clarity improvements)
+    # INSIGHTS — CHARTS (same 5)
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1269,7 +1385,6 @@ if opps_file and roles_file:
     st.markdown("---")
     section_start("Download Full PDF Report")
 
-    # Metrics dictionary for PDF
     metrics_dict = {
         "Current Opportunity Insights": [
             ["Total Opportunities", f"{total_opps:,}"],
@@ -1299,7 +1414,6 @@ if opps_file and roles_file:
         ],
     }
 
-    # Add Stage Gates to PDF metrics
     if gate_roll is not None:
         gate_rows_pdf = []
         for _, rr in gate_roll.iterrows():
@@ -1321,10 +1435,8 @@ if opps_file and roles_file:
             ])
         metrics_dict["Stage Coverage Gates"] = gate_rows_pdf
 
-    # Build matplotlib charts for PDF
     chart_pngs = []
 
-    # Chart 1: Win rate by contact bucket
     fig1, ax1 = plt.subplots(figsize=(7, 3.2))
     ax1.plot(winrate_bucket["Winrate Bucket"], winrate_bucket["Win Rate"], marker="o")
     ax1.yaxis.set_major_formatter(PercentFormatter(1.0))
@@ -1333,7 +1445,6 @@ if opps_file and roles_file:
     ax1.set_ylabel("Win Rate")
     chart_pngs.append(fig_to_png_bytes(fig1))
 
-    # Chart 2: Open pipeline by coverage bucket
     fig2, ax2 = plt.subplots(figsize=(7, 3.2))
     ax2.bar(open_pipeline_bucket["Open Coverage Bucket"], open_pipeline_bucket["Open Pipeline"])
     ax2.set_title("Open Pipeline by Coverage Bucket")
@@ -1341,14 +1452,12 @@ if opps_file and roles_file:
     ax2.set_ylabel("Pipeline ($)")
     chart_pngs.append(fig_to_png_bytes(fig2))
 
-    # Chart 3: Coverage funnel
     fig3, ax3 = plt.subplots(figsize=(7, 3.2))
     ax3.barh(funnel_counts["Coverage Funnel Bucket"], funnel_counts["Open Opps"])
     ax3.set_title("Open Opportunities Coverage Funnel")
     ax3.set_xlabel("# Open Opps")
     chart_pngs.append(fig_to_png_bytes(fig3))
 
-    # Chart 4: Velocity line
     fig4, ax4 = plt.subplots(figsize=(7, 3.2))
     for sg in avg_days_bucket["Stage Group"].unique():
         sub = avg_days_bucket[avg_days_bucket["Stage Group"] == sg]
@@ -1359,7 +1468,6 @@ if opps_file and roles_file:
     ax4.legend()
     chart_pngs.append(fig_to_png_bytes(fig4))
 
-    # Chart 5: Heatmap proxy (simple bar by stage for PDF)
     fig5, ax5 = plt.subplots(figsize=(7, 3.2))
     stage_health = heat_counts.groupby("Stage Bucket")["Pct"].mean().reindex(["Early","Mid","Late","Open"]).fillna(0)
     ax5.bar(stage_health.index, stage_health.values)
