@@ -677,10 +677,18 @@ if opps_file and roles_file:
     # Executive Summary  (benchmark higher than open avg)
     # ======================================================
     bullets = []
-    bullets.append(
+
+    # UPDATED FIRST BULLET: append won-zero warning inside the first point
+    first_bullet = (
         f"Current win rate is **{win_rate:.1%}**. Won deals average **{avg_cr_won:.1f}** contact roles vs Lost at **{avg_cr_lost:.1f}**, "
         "showing strong correlation between buying-group depth and conversion."
     )
+    if won_zero_count > 0:
+        first_bullet += (
+            f" ⚠️ **{won_zero_count:,} Won deals** have **0** contact roles logged "
+            f"(≈{won_zero_pct:.0%} of Won), indicating CRM hygiene gaps."
+        )
+    bullets.append(first_bullet)
 
     target_open_benchmark = max(2.0, round(avg_cr_won, 1))
     if target_open_benchmark <= avg_cr_open:
@@ -698,10 +706,6 @@ if opps_file and roles_file:
     if open_pipeline_risk > 0:
         bullets.append(
             f"**{fmt_money(open_pipeline_risk)}** of open pipeline is under-covered (0–1 roles), representing **{risk_pct:.0%}** of open opportunities."
-        )
-    if won_zero_count > 0:
-        bullets.append(
-            f"⚠️ **{won_zero_count:,} Won deals** have **0** contact roles logged (≈{won_zero_pct:.0%} of Won), indicating CRM hygiene gaps."
         )
 
     section_start("Executive Summary")
@@ -1110,7 +1114,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Live Simulator — renamed + dynamic status-quo text
+    # Live Simulator — How coverage changes can improve your pipeline
     # ======================================================
     def as_bucket_for_model(n):
         try:
@@ -1163,7 +1167,6 @@ if opps_file and roles_file:
     inc_low = max(0, enhanced_expected_low - current_expected_high)
     inc_high = max(0, enhanced_expected_high - current_expected_low)
 
-    # Dynamic status-quo headline based on slider direction vs current avg
     delta_vs_current = target_contacts - avg_cr_open
     if abs(delta_vs_current) < 0.01:
         status_text = "Status-quo outlook (you’re modeling today’s average coverage — no change)"
