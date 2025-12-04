@@ -284,7 +284,6 @@ def build_pdf_report(
     story.append(Paragraph("Recommended Enhancements", styles["H2"]))
     if recommended_enhancements:
         for r in recommended_enhancements:
-            # r already formatted with line breaks using \n\n.
             safe_r = html.escape(r).replace("\n", "<br/>")
             story.append(Paragraph(f"• {safe_r}", styles["Body"]))
             story.append(Spacer(1, 0.04*inch))
@@ -416,23 +415,24 @@ st.markdown("""
   display:inline-block;
 }
 
+/* Recommended Enhancements now matches Executive Summary font sizing */
 .reco-item{
   background:#ffffff;
   border:1px solid #e5e7eb;
   border-radius:10px;
   padding:10px 12px;
   margin:10px 0;
-  font-size:15px;
-  line-height:1.55;
+  font-size:17px;     /* match exec-summary */
+  line-height:1.6;    /* match exec-summary */
+  font-weight:500;    /* match exec-summary */
 }
 .reco-title{
   font-weight:800;
   margin-bottom:6px;
 }
 .reco-detail{
-  font-size:14px;
+  margin:2px 0;       /* inherits font-size/line-height */
   color:#111827;
-  margin:2px 0;
 }
 .reco-chip{
   display:inline-block;
@@ -546,10 +546,20 @@ if opps_file and roles_file:
         options=all_types,
         default=all_types
     )
+
+    # (2) NEW GLOBAL AMOUNT FILTER — immediately after type multiselect
+    exclude_nonpositive_amounts = st.checkbox(
+        "Exclude Opportunities with negative amount or 0 amount.",
+        value=False
+    )
+
     section_end()
 
     if selected_types:
         opps = opps[opps["Type"].isin(selected_types)].copy()
+
+    if exclude_nonpositive_amounts:
+        opps = opps[opps["Amount"] > 0].copy()
 
     opps = opps.reset_index(drop=True)
 
@@ -767,7 +777,7 @@ if opps_file and roles_file:
         {
             "tag": "RevOps Global SF Solution",
             "priority": "High",
-            "condition": lambda: True,  # ALWAYS shown
+            "condition": lambda: True,
             "title": "Automate Opportunity–Contact Role Association",
             "details": [
                 "Fix: Many deals are missing stakeholders because manual role logging is inconsistent.",
@@ -809,14 +819,15 @@ if opps_file and roles_file:
                 "Next step: Managers pull these deals into a weekly ‘coverage red flag’ huddle until fixed."
             ],
         },
+        # (1) Tag changed to Customer Success
         {
-            "tag": "Data Hygiene",
+            "tag": "Customer Success",
             "priority": "High",
             "condition": lambda: won_zero_count >= max(3, won_count * 0.05),
             "title": "Backfill Missing Roles on Won Deals",
             "details": [
                 "Fix: Won deals with 0 roles distort benchmarks and ROI attribution.",
-                "How: RevOps runs a backfill campaign using closed-won notes, emails, and participants to tag roles retroactively.",
+                "How: CS/RevOps runs a backfill campaign using closed-won notes, emails, and participants to tag roles retroactively.",
                 "Next step: Add a close checklist blocking Won status if role count = 0."
             ],
         },
@@ -902,7 +913,6 @@ if opps_file and roles_file:
         key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"])
     )
 
-    # Expanded text for PDF (multi-line)
     relevant_enhancements_pdf = []
     for e in relevant_enhancements:
         block = f"[{e['priority']} — {e['tag']}] {e['title']}\n"
@@ -936,7 +946,6 @@ if opps_file and roles_file:
 
     # ======================================================
     # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
-    # Won gate = Late gate, Lost gate = Mid gate
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
