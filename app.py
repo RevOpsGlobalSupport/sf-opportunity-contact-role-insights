@@ -508,7 +508,6 @@ if opps_file and roles_file:
         default=all_types
     )
 
-    # Exclude non-positive amount filter (global)
     exclude_non_positive = st.checkbox(
         "Exclude Opportunities with negative amount or 0 amount.",
         value=False
@@ -713,7 +712,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
+    # Stage Coverage Gates
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -764,7 +763,6 @@ if opps_file and roles_file:
         gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
 
         display_gate = gate_roll.rename(columns={
-            "Stage Bucket": "Stage Bucket",
             "Gate Value": "Gate (min contacts)",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
@@ -804,13 +802,11 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Recommended Enhancements (max 5 excluding automation)
-    # Automation ALWAYS included, CS-tagged backfill point when relevant
+    # Recommended Enhancements
     # ======================================================
     def build_recommendations():
         recs = []
 
-        # Always include automation point (not counted toward 5 limit)
         automation_head = "Automate Opportunity–Contact Role Association with RevOps Global’s CRM Solution"
         automation_body = (
             "Implement RevOps Global’s CRM automation to auto-suggest and associate relevant stakeholders at creation and stage progression. "
@@ -852,7 +848,6 @@ if opps_file and roles_file:
                 "Next step: CS Ops runs a monthly cleanup using the red-flag list."
             ))
 
-        # Stage gate enforcement if weak coverage exists
         if gate_roll is not None and not gate_roll.empty:
             weak = gate_roll[gate_roll["Opp Coverage %"] < 0.65]["Stage Bucket"].tolist()
             if weak:
@@ -949,7 +944,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # INSIGHTS — CHARTS (same 5)
+    # INSIGHTS — CHARTS
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1115,8 +1110,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Simulator — Target Contact Coverage
-    # (same improved block as before)
+    # Live Simulator — renamed + dynamic status-quo text
     # ======================================================
     def as_bucket_for_model(n):
         try:
@@ -1146,10 +1140,11 @@ if opps_file and roles_file:
     current_expected_low = (open_df["weighted_amount"] * open_df["bucket_ci_low"]).sum()
     current_expected_high = (open_df["weighted_amount"] * open_df["bucket_ci_high"]).sum()
 
-    section_start("Simulator — Target Contact Coverage")
+    simulator_title = "Live Simulator — How coverage changes can improve your pipeline"
+    section_start(simulator_title)
     st.caption(
         "This simulator uses **your historical closed-deal data** to estimate how buying-group depth changes outcomes. "
-        "It also weights Late/Mid stages more heavily because coverage matters most closer to close."
+        "Late/Mid stages are weighted more heavily because coverage matters most closer to close."
     )
 
     st.markdown("**A) Improve average coverage on all open deals**")
@@ -1168,17 +1163,31 @@ if opps_file and roles_file:
     inc_low = max(0, enhanced_expected_low - current_expected_high)
     inc_high = max(0, enhanced_expected_high - current_expected_low)
 
-    st.markdown("**Status-quo outlook (Option C: what happens if we do nothing?)**")
+    # Dynamic status-quo headline based on slider direction vs current avg
+    delta_vs_current = target_contacts - avg_cr_open
+    if abs(delta_vs_current) < 0.01:
+        status_text = "Status-quo outlook (you’re modeling today’s average coverage — no change)"
+    elif delta_vs_current > 0:
+        status_text = (
+            f"Status-quo outlook (current state before improving coverage by "
+            f"{delta_vs_current:+.1f} contacts on average)"
+        )
+    else:
+        status_text = (
+            f"Status-quo outlook (if average coverage drops by "
+            f"{delta_vs_current:.1f} contacts, this is the baseline you’re moving away from)"
+        )
+
+    st.markdown(f"**{status_text}**")
     label_with_tooltip("Stage-weighted Expected Won Pipeline (Open) — Current",
                        "Sum of (open Amount × stage weight × win rate for its current contact bucket).")
     show_value(fmt_money(current_expected_weighted))
 
     st.markdown("**Modeled uplift if average coverage improves to target**")
-    delta_contacts = target_contacts - avg_cr_open
-    pct_contacts = (delta_contacts / avg_cr_open) if avg_cr_open > 0 else 0
+    pct_contacts = (delta_vs_current / avg_cr_open) if avg_cr_open > 0 else 0
     label_with_tooltip("Target Avg Contacts (Open)",
                        "Selected target vs current average contacts on open deals.")
-    show_value(f"{target_contacts:.1f} vs Current {avg_cr_open:.1f} ({delta_contacts:+.1f}, {pct_contacts:+.0%})")
+    show_value(f"{target_contacts:.1f} vs Current {avg_cr_open:.1f} ({delta_vs_current:+.1f}, {pct_contacts:+.0%})")
 
     label_with_tooltip("Modeled Win Rate at Target (from your closed deals)",
                        "Win rate observed historically for the selected contact bucket.")
@@ -1426,7 +1435,7 @@ if opps_file and roles_file:
             ["Open Pipeline at Risk (0–1 roles)", fmt_money(open_pipeline_risk)],
             ["% of Open Opps Missing Contacts", f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})"],
         ],
-        "Simulator — Target Contact Coverage": [
+        simulator_title: [
             ["Target Avg Contacts (Open)", f"{target_contacts:.1f} (bucket {target_bucket})"],
             ["Modeled Win Rate at Target", f"{target_wr:.1%} (CI {target_ci_low:.1%}–{target_ci_high:.1%})"],
             ["Current Stage-weighted Expected Won Pipeline", fmt_money(current_expected_weighted)],
