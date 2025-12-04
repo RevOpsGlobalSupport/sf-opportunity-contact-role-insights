@@ -157,6 +157,16 @@ def wilson_ci(k, n, z=1.96):
     return (max(0.0, center - margin), min(1.0, center + margin))
 
 
+def render_body_bullets(items):
+    """Render bullet list using consistent body text styling."""
+    if not items:
+        return
+    st.markdown("<div class='body-text'>", unsafe_allow_html=True)
+    for it in items:
+        st.markdown(f"• {it}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 # Seniority bucketing (kept for future use)
 def bucket_seniority(title: str) -> str:
     if not isinstance(title, str) or title.strip() == "":
@@ -401,38 +411,28 @@ st.markdown("""
 }
 .tooltip-icon:hover .tooltip-text{ visibility:visible; }
 
-.exec-summary{
+/* ONE BODY STYLE USED EVERYWHERE */
+.body-text{
   font-size:17px;
   line-height:1.6;
   font-weight:500;
+  color:#111827;
 }
 
-.score-badge{
-  font-size:22px;
-  font-weight:800;
-  padding:6px 10px;
-  border-radius:8px;
-  display:inline-block;
-}
-
-/* Recommended Enhancements now matches Executive Summary font sizing */
+/* Recommended Enhancements match body style */
 .reco-item{
   background:#ffffff;
   border:1px solid #e5e7eb;
   border-radius:10px;
   padding:10px 12px;
   margin:10px 0;
-  font-size:17px;     /* match exec-summary */
-  line-height:1.6;    /* match exec-summary */
-  font-weight:500;    /* match exec-summary */
 }
 .reco-title{
   font-weight:800;
   margin-bottom:6px;
 }
 .reco-detail{
-  margin:2px 0;       /* inherits font-size/line-height */
-  color:#111827;
+  margin:2px 0;
 }
 .reco-chip{
   display:inline-block;
@@ -443,6 +443,13 @@ st.markdown("""
   background:#eef2ff;
   color:#3730a3;
   margin-right:6px;
+}
+.score-badge{
+  font-size:22px;
+  font-weight:800;
+  padding:6px 10px;
+  border-radius:8px;
+  display:inline-block;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -547,12 +554,11 @@ if opps_file and roles_file:
         default=all_types
     )
 
-    # (2) NEW GLOBAL AMOUNT FILTER — immediately after type multiselect
+    # Global Amount Filter
     exclude_nonpositive_amounts = st.checkbox(
         "Exclude Opportunities with negative amount or 0 amount.",
         value=False
     )
-
     section_end()
 
     if selected_types:
@@ -744,14 +750,11 @@ if opps_file and roles_file:
         )
 
     section_start("Executive Summary")
-    st.markdown("<div class='exec-summary'>", unsafe_allow_html=True)
-    for b in bullets:
-        st.markdown(f"• {b}")
-    st.markdown("</div>", unsafe_allow_html=True)
+    render_body_bullets(bullets)
     section_end()
 
     # ======================================================
-    # Recommended Enhancements (Expanded + always-on ROG point)
+    # Recommended Enhancements (limit to 5 + always include automation)
     # ======================================================
     pct_1_or_less_open = (
         open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() / open_opps_total
@@ -775,18 +778,20 @@ if opps_file and roles_file:
     enhancements_library = [
         # Always-on RevOps Global automation point
         {
+            "is_rog_automation": True,
             "tag": "RevOps Global SF Solution",
             "priority": "High",
             "condition": lambda: True,
             "title": "Automate Opportunity–Contact Role Association",
             "details": [
-                "Fix: Many deals are missing stakeholders because manual role logging is inconsistent.",
-                "How: Deploy RevOps Global’s Salesforce automation to auto-suggest Account contacts on opp creation and auto-sync roles as emails/meetings occur.",
-                "Next step: Enable the package, map your key personas, and set stage-based auto-association rules."
+                "Fix: Manual role logging is inconsistent, leaving deals under-threaded.",
+                "How: Deploy RevOps Global’s Salesforce automation to auto-suggest Account contacts on opp creation and auto-sync roles as activity occurs.",
+                "Next step: Enable the package, map core personas, and apply stage-based auto-association rules."
             ],
         },
 
         {
+            "is_rog_automation": False,
             "tag": "Sales",
             "priority": "High",
             "condition": lambda: pct_1_or_less_open >= 0.30,
@@ -798,6 +803,7 @@ if opps_file and roles_file:
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "Enablement",
             "priority": "High",
             "condition": lambda: open_won_gap >= 1.0,
@@ -805,116 +811,118 @@ if opps_file and roles_file:
             "details": [
                 "Fix: Open deals are not keeping pace with Won buying-group depth.",
                 "How: Define required personas per stage (Early→Champion, Mid→EB+Tech Eval, Late→Procurement/Legal).",
-                "Next step: Convert these into rep checklists or call-scorecards and review adherence in 1:1s."
+                "Next step: Convert these into rep checklists or scorecards and review weekly."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "Sales Leadership",
             "priority": "High",
             "condition": lambda: late_mid_undercovered_n >= max(3, open_opps_total * 0.10),
             "title": "Escalate Late/Mid Deals with ≤1 Role into Manager Review",
             "details": [
                 "Fix: Late/Mid under-covered deals are immediate forecast risk.",
-                "How: Require a stakeholder expansion plan before next-step approval (who’s missing, how to access them, by when).",
-                "Next step: Managers pull these deals into a weekly ‘coverage red flag’ huddle until fixed."
+                "How: Require a stakeholder expansion plan before next-step approval.",
+                "Next step: Managers run a weekly ‘coverage red flag’ huddle until fixed."
             ],
         },
-        # (1) Tag changed to Customer Success
         {
+            "is_rog_automation": False,
             "tag": "Customer Success",
             "priority": "High",
             "condition": lambda: won_zero_count >= max(3, won_count * 0.05),
             "title": "Backfill Missing Roles on Won Deals",
             "details": [
                 "Fix: Won deals with 0 roles distort benchmarks and ROI attribution.",
-                "How: CS/RevOps runs a backfill campaign using closed-won notes, emails, and participants to tag roles retroactively.",
+                "How: CS/RevOps backfills using closed-won notes, emails, and meeting participants.",
                 "Next step: Add a close checklist blocking Won status if role count = 0."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "RevOps",
             "priority": "High",
             "condition": lambda: pct_0_open >= 0.12,
             "title": "Prevent Stage Advancement When Coverage = 0",
             "details": [
-                "Fix: Zero-contact opportunities are a leading indicator of loss and poor CRM hygiene.",
-                "How: Add validation rules or path warnings requiring ≥1 role before moving beyond Early/Mid stages.",
-                "Next step: Pilot in one team first, then roll out org-wide after 2–3 weeks."
+                "Fix: Zero-contact opportunities strongly predict loss.",
+                "How: Add validation rules requiring ≥1 role beyond Early/Mid.",
+                "Next step: Pilot with one team, then scale org-wide after adoption proves stable."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "Marketing Ops",
             "priority": "Medium",
             "condition": lambda: pct_1_or_less_open >= 0.20 and open_pipeline_risk > 0,
             "title": "Trigger ABM Air-Cover on Under-Covered Accounts",
             "details": [
-                "Fix: Missing evaluators/influencers slows decision cycles and lowers win rate.",
-                "How: Run persona-based ads + intent outreach to surface new stakeholders for reps.",
+                "Fix: Missing evaluators/influencers slows decisions.",
+                "How: Run persona ads + intent outreach to surface new stakeholders.",
                 "Next step: Route engaged contacts into Salesforce and auto-associate to the active opp."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "RevOps",
             "priority": "Medium",
             "condition": lambda: pct_2plus_open_local < 0.55,
             "title": "Add Contact-Coverage as a Forecast Risk Dimension",
             "details": [
-                "Fix: Forecast rollups miss buying-group weakness until it’s too late.",
-                "How: Flag deals with <2 roles as ‘at-risk’ and report by stage + owner weekly.",
-                "Next step: Add this metric to forecast calls and QBR dashboards."
+                "Fix: Forecast rollups miss buying-group weakness early.",
+                "How: Flag deals with <2 roles as at-risk and show by stage + owner weekly.",
+                "Next step: Add this as a standard forecast call view."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "Enablement",
             "priority": "Medium",
             "condition": lambda: lost_vs_won_contact_gap >= 1.5,
             "title": "Coach to Close the Lost vs Won Buying-Group Gap",
             "details": [
-                "Fix: Lost deals show a large stakeholder depth deficit vs Won.",
+                "Fix: Lost deals show a large stakeholder depth deficit.",
                 "How: Train reps to map decision process early and multi-thread objections by persona.",
-                "Next step: Run deal reviews focused on ‘who’s missing and why’ using real Lost examples."
+                "Next step: Run deal reviews focused on who’s missing and why."
             ],
         },
         {
+            "is_rog_automation": False,
             "tag": "Marketing",
             "priority": "Low",
             "condition": lambda: pct_2plus_open_local < 0.45,
             "title": "Systematically Capture Missing Stakeholders via Programs",
             "details": [
                 "Fix: Open deals aren’t broadening beyond initial contacts.",
-                "How: Use webinars, workshops, and gated assets to bring in evaluators and influencers.",
-                "Next step: Ensure campaign forms collect role/persona and sync to CRM."
-            ],
-        },
-        {
-            "tag": "Sales",
-            "priority": "Low",
-            "condition": lambda: avg_cr_open >= 2.0 and pct_1_or_less_open < 0.15,
-            "title": "Shift from Coverage Quantity to Coverage Quality",
-            "details": [
-                "Fix: Overall coverage is healthy, but roles may not be the right ones.",
-                "How: Validate Champion strength, EB alignment, and procurement timing on top deals.",
-                "Next step: Require reps to label ‘primary buying role’ + confidence level per opp."
+                "How: Use webinars, workshops, and gated assets to bring in evaluators.",
+                "Next step: Ensure forms collect persona and sync to CRM."
             ],
         },
     ]
 
-    relevant_enhancements = []
+    relevant = []
     for e in enhancements_library:
         try:
             if e["condition"]():
-                relevant_enhancements.append(e)
+                relevant.append(e)
         except Exception:
             continue
 
-    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
-    relevant_enhancements = sorted(
-        relevant_enhancements,
-        key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"])
-    )
+    # Separate always-on automation
+    rog_auto = [e for e in relevant if e.get("is_rog_automation")]
+    others = [e for e in relevant if not e.get("is_rog_automation")]
 
+    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
+    others = sorted(others, key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"]))
+
+    # LIMIT to 5 non-automation recommendations
+    others = others[:5]
+
+    final_recos = rog_auto + others
+
+    # PDF blocks
     relevant_enhancements_pdf = []
-    for e in relevant_enhancements:
+    for e in final_recos:
         block = f"[{e['priority']} — {e['tag']}] {e['title']}\n"
         for d in e.get("details", []):
             block += f"- {d}\n"
@@ -922,16 +930,16 @@ if opps_file and roles_file:
 
     section_start("Recommended Enhancements")
     st.caption(
-        "These recommendations are generated from your coverage patterns above. "
-        "Each one includes what to fix, how to fix it, and the next step."
+        "These are generated from your coverage patterns. Each one includes what to fix, how to fix it, and a next step."
     )
 
-    if not relevant_enhancements:
-        st.markdown("✅ Coverage looks healthy relative to won patterns. Keep current gates, hygiene checks, and coaching rhythm.")
+    if not final_recos:
+        st.markdown("<div class='body-text'>✅ Coverage looks healthy. Maintain current gates and coaching rhythm.</div>",
+                    unsafe_allow_html=True)
     else:
-        for e in relevant_enhancements:
+        for e in final_recos:
             st.markdown(
-                f"<div class='reco-item'>"
+                f"<div class='reco-item body-text'>"
                 f"<div class='reco-title'>"
                 f"<span class='reco-chip'>{e['priority']}</span>"
                 f"<span class='reco-chip'>{e['tag']}</span>"
@@ -945,7 +953,7 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
+    # Stage Coverage Gates
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -996,7 +1004,6 @@ if opps_file and roles_file:
         gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
 
         display_gate = gate_roll.rename(columns={
-            "Stage Bucket": "Stage Bucket",
             "Gate Value": "Gate (min contacts)",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
@@ -1119,10 +1126,7 @@ if opps_file and roles_file:
     incremental_won_pipeline = max(0, enhanced_expected_wins - current_expected_wins)
 
     st.markdown("**Status-quo outlook (if nothing changes):**")
-    label_with_tooltip(
-        "Expected Won Pipeline (Open) — Current",
-        "Open pipeline × current win rate."
-    )
+    label_with_tooltip("Expected Won Pipeline (Open) — Current", "Open pipeline × current win rate.")
     show_value(fmt_money(current_expected_wins))
 
     st.markdown("**Modeled Uplift (if Open coverage improves):**")
@@ -1179,7 +1183,8 @@ if opps_file and roles_file:
     owner_bullets_pdf = []
     shown = 0
     if owner_roll.empty:
-        st.markdown("No open opportunities found for the selected filters.")
+        st.markdown("<div class='body-text'>No open opportunities found for the selected filters.</div>",
+                    unsafe_allow_html=True)
     else:
         for _, r in owner_roll.iterrows():
             open_opps_n = int(r["open_opps"])
@@ -1199,9 +1204,7 @@ if opps_file and roles_file:
             )
 
             with st.expander(exp_title, expanded=False):
-                st.text(
-                    f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline"
-                )
+                st.text(f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline")
 
                 rep_under = owner_df[
                     (owner_df["Opportunity Owner"] == owner_name) &
@@ -1209,7 +1212,8 @@ if opps_file and roles_file:
                 ].copy()
 
                 if rep_under.empty:
-                    st.write("✅ No under-covered open opportunities for this rep.")
+                    st.markdown("<div class='body-text'>✅ No under-covered open opportunities for this rep.</div>",
+                                unsafe_allow_html=True)
                 else:
                     rep_under = rep_under.sort_values(
                         ["Stage Bucket Rank", "Amount"],
@@ -1223,9 +1227,7 @@ if opps_file and roles_file:
                         "Amount",
                         "contact_count"
                     ]
-                    rep_table = rep_under[display_cols].rename(columns={
-                        "contact_count": "# Contact Roles"
-                    })
+                    rep_table = rep_under[display_cols].rename(columns={"contact_count": "# Contact Roles"})
                     rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
                     rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
                     st.dataframe(rep_table, use_container_width=True, hide_index=True)
@@ -1270,10 +1272,10 @@ if opps_file and roles_file:
         )
 
     if priority_bullets:
-        for b in priority_bullets:
-            st.markdown(f"• {b}")
+        render_body_bullets(priority_bullets)
     else:
-        st.markdown("• No under-covered open opportunities found (after excluding Qualified Out).")
+        st.markdown("<div class='body-text'>• No under-covered open opportunities found (after excluding Qualified Out).</div>",
+                    unsafe_allow_html=True)
 
     section_end()
 
@@ -1295,9 +1297,7 @@ if opps_file and roles_file:
                 f"Amount: ${rr.get('Amount',0):,.0f}"
             )
 
-        for b in won_zero_bullets:
-            st.markdown(f"• {b}")
-
+        render_body_bullets(won_zero_bullets)
         section_end()
 
     # ======================================================
