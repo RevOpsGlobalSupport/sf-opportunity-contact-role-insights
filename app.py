@@ -157,17 +157,7 @@ def wilson_ci(k, n, z=1.96):
     return (max(0.0, center - margin), min(1.0, center + margin))
 
 
-def render_body_bullets(items):
-    """Render bullet list using consistent body text styling."""
-    if not items:
-        return
-    st.markdown("<div class='body-text'>", unsafe_allow_html=True)
-    for it in items:
-        st.markdown(f"• {it}")
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-# Seniority bucketing (kept for future use)
+# Seniority bucketing
 def bucket_seniority(title: str) -> str:
     if not isinstance(title, str) or title.strip() == "":
         return "Other / Unknown"
@@ -229,7 +219,7 @@ def fig_to_png_bytes(fig):
 def build_pdf_report(
     metrics_dict,
     bullets,
-    recommended_enhancements,
+    enhancements,
     chart_pngs,
     won_zero_rows,
     owner_bullets,
@@ -292,17 +282,11 @@ def build_pdf_report(
     story.append(Spacer(1, 0.12*inch))
 
     story.append(Paragraph("Recommended Enhancements", styles["H2"]))
-    if recommended_enhancements:
-        for r in recommended_enhancements:
-            safe_r = html.escape(r).replace("\n", "<br/>")
-            story.append(Paragraph(f"• {safe_r}", styles["Body"]))
-            story.append(Spacer(1, 0.04*inch))
-    else:
-        story.append(Paragraph(
-            "• Coverage looks healthy relative to won patterns. Maintain current gates and coaching rhythm.",
-            styles["Body"]
-        ))
-    story.append(Spacer(1, 0.12*inch))
+    for h, body in enhancements:
+        story.append(Paragraph(f"• {html.escape(h)}", styles["Body"]))
+        story.append(Paragraph(html.escape(body), styles["Body"]))
+        story.append(Spacer(1, 0.06*inch))
+    story.append(Spacer(1, 0.1*inch))
 
     if won_zero_rows:
         story.append(Paragraph("Won Deals Missing Contact Roles (Red Flag)", styles["H2"]))
@@ -411,39 +395,12 @@ st.markdown("""
 }
 .tooltip-icon:hover .tooltip-text{ visibility:visible; }
 
-/* ONE BODY STYLE USED EVERYWHERE */
-.body-text{
+.exec-summary{
   font-size:17px;
   line-height:1.6;
   font-weight:500;
-  color:#111827;
 }
 
-/* Recommended Enhancements match body style */
-.reco-item{
-  background:#ffffff;
-  border:1px solid #e5e7eb;
-  border-radius:10px;
-  padding:10px 12px;
-  margin:10px 0;
-}
-.reco-title{
-  font-weight:800;
-  margin-bottom:6px;
-}
-.reco-detail{
-  margin:2px 0;
-}
-.reco-chip{
-  display:inline-block;
-  font-size:12px;
-  font-weight:700;
-  padding:2px 8px;
-  border-radius:999px;
-  background:#eef2ff;
-  color:#3730a3;
-  margin-right:6px;
-}
 .score-badge{
   font-size:22px;
   font-weight:800;
@@ -554,8 +511,8 @@ if opps_file and roles_file:
         default=all_types
     )
 
-    # Global Amount Filter
-    exclude_nonpositive_amounts = st.checkbox(
+    # Exclude non-positive amount filter (global)
+    exclude_non_positive = st.checkbox(
         "Exclude Opportunities with negative amount or 0 amount.",
         value=False
     )
@@ -564,7 +521,7 @@ if opps_file and roles_file:
     if selected_types:
         opps = opps[opps["Type"].isin(selected_types)].copy()
 
-    if exclude_nonpositive_amounts:
+    if exclude_non_positive:
         opps = opps[opps["Amount"] > 0].copy()
 
     opps = opps.reset_index(drop=True)
@@ -722,19 +679,23 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Executive Summary
+    # Executive Summary  (benchmark higher than open avg)
     # ======================================================
     bullets = []
     bullets.append(
         f"Current win rate is **{win_rate:.1%}**. Won deals average **{avg_cr_won:.1f}** contact roles vs Lost at **{avg_cr_lost:.1f}**, "
         "showing strong correlation between buying-group depth and conversion."
     )
-    open_benchmark_target = max(2.0, avg_cr_won)
-    if avg_cr_open < open_benchmark_target:
-        bullets.append(
-            f"Open opportunities average **{avg_cr_open:.1f}** contact roles. Increasing this towards **at least {open_benchmark_target:.1f}** "
-            "contacts per opportunity would align open deals with won buying-group patterns."
-        )
+
+    # ensure benchmark is higher than open avg; use won avg as anchor
+    target_open_benchmark = max(2.0, round(avg_cr_won, 1))
+    if target_open_benchmark <= avg_cr_open:
+        target_open_benchmark = round(avg_cr_open + 0.5, 1)
+
+    bullets.append(
+        f"Open opportunities average **{avg_cr_open:.1f}** contact roles. Increasing this towards **at least {target_open_benchmark:.1f}** "
+        "contacts per opportunity would align open deals with won buying-group patterns."
+    )
 
     open_pipeline = open_df["Amount"].sum() if not open_df.empty else 0
     open_pipeline_risk = open_df[open_df["contact_count"] <= 1]["Amount"].sum() if not open_df.empty else 0
@@ -750,210 +711,110 @@ if opps_file and roles_file:
         )
 
     section_start("Executive Summary")
-    render_body_bullets(bullets)
+    st.markdown("<div class='exec-summary'>", unsafe_allow_html=True)
+    for b in bullets:
+        st.markdown(f"• {b}")
+    st.markdown("</div>", unsafe_allow_html=True)
     section_end()
 
     # ======================================================
-    # Recommended Enhancements (limit to 5 + always include automation)
+    # Recommended Enhancements (max 5 excluding automation)
+    # Automation point always included
+    # Tag Backfill Missing Roles on Won Deals to CS
     # ======================================================
-    pct_1_or_less_open = (
-        open_df[open_df["contact_count"] <= 1]["Opportunity ID"].nunique() / open_opps_total
-        if open_opps_total > 0 else 0
-    )
-    pct_0_open = pct_zero_open
-    pct_2plus_open_local = pct_2plus_open
-    open_won_gap = avg_cr_won - avg_cr_open if (avg_cr_won is not None and avg_cr_open is not None) else 0
+    def build_recommendations():
+        recs = []
 
-    won_lost_total = (won_count + lost_count)
-    lost_vs_won_contact_gap = (avg_cr_won - avg_cr_lost) if (avg_cr_won is not None and avg_cr_lost is not None) else 0
+        # Always include automation point (not counted toward 5 limit)
+        automation_head = "Automate Opportunity–Contact Role Association with RevOps Global’s CRM Solution"
+        automation_body = (
+            "Implement RevOps Global’s CRM automation to auto-suggest and associate relevant stakeholders at creation and stage progression. "
+            "Start by enabling the managed package / workflow, then set rules for ‘engaged contacts’ and buying-group roles. "
+            f"Next step: request access or a demo here — {CTA_URL}."
+        )
 
-    late_mid_undercovered_n = 0
-    if not open_df.empty:
-        late_mid_undercovered_n = open_df[
-            open_df["Stage Bucket"].isin(["Late", "Mid"]) & (open_df["contact_count"] <= 1)
-        ]["Opportunity ID"].nunique()
+        # Candidate recs (will select relevant ones)
+        candidates = []
 
-    pct_opps_without_roles = opps_without_cr / max(total_opps, 1)
+        # 1) Under-covered open pipeline
+        if open_opps_total > 0 and risk_pct >= 0.25:
+            candidates.append((
+                "Prioritize late- and mid-stage open deals with low coverage",
+                "Focus on open opportunities with 0–1 roles in Late/Mid buckets. "
+                "Have reps add at least one new stakeholder per deal (economic buyer + champion). "
+                "Next step: work from the 'Top Open Opportunities to Fix First' list and update roles weekly."
+            ))
 
-    enhancements_library = [
-        # Always-on RevOps Global automation point
-        {
-            "is_rog_automation": True,
-            "tag": "RevOps Global SF Solution",
-            "priority": "High",
-            "condition": lambda: True,
-            "title": "Automate Opportunity–Contact Role Association",
-            "details": [
-                "Fix: Manual role logging is inconsistent, leaving deals under-threaded.",
-                "How: Deploy RevOps Global’s Salesforce automation to auto-suggest Account contacts on opp creation and auto-sync roles as activity occurs.",
-                "Next step: Enable the package, map core personas, and apply stage-based auto-association rules."
-            ],
-        },
+        # 2) Open avg gap vs won
+        if avg_cr_won > 0 and (avg_cr_won - avg_cr_open) >= 1.0:
+            candidates.append((
+                "Close the buying-group depth gap on open opportunities",
+                "Won deals average significantly more stakeholders than open deals. "
+                f"Set a near-term target of {target_open_benchmark:.1f} contacts per open deal, starting with Late stages. "
+                "Next step: add a required ‘Buying Group’ checklist to pipeline reviews."
+            ))
 
-        {
-            "is_rog_automation": False,
-            "tag": "Sales",
-            "priority": "High",
-            "condition": lambda: pct_1_or_less_open >= 0.30,
-            "title": "Launch a Multi-Threading Sprint on Under-Covered Open Deals",
-            "details": [
-                "Fix: A large share of open deals have 0–1 roles, which behave like Lost deals.",
-                "How: Reps must add at least a Champion + Economic Buyer + Evaluator; enforce via weekly pipeline inspections.",
-                "Next step: Use the ‘Top Open Opportunities to Fix First’ list to assign owners and deadlines this week."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Enablement",
-            "priority": "High",
-            "condition": lambda: open_won_gap >= 1.0,
-            "title": "Roll Out a Stage-Based Buying Group Playbook",
-            "details": [
-                "Fix: Open deals are not keeping pace with Won buying-group depth.",
-                "How: Define required personas per stage (Early→Champion, Mid→EB+Tech Eval, Late→Procurement/Legal).",
-                "Next step: Convert these into rep checklists or scorecards and review weekly."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Sales Leadership",
-            "priority": "High",
-            "condition": lambda: late_mid_undercovered_n >= max(3, open_opps_total * 0.10),
-            "title": "Escalate Late/Mid Deals with ≤1 Role into Manager Review",
-            "details": [
-                "Fix: Late/Mid under-covered deals are immediate forecast risk.",
-                "How: Require a stakeholder expansion plan before next-step approval.",
-                "Next step: Managers run a weekly ‘coverage red flag’ huddle until fixed."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Customer Success",
-            "priority": "High",
-            "condition": lambda: won_zero_count >= max(3, won_count * 0.05),
-            "title": "Backfill Missing Roles on Won Deals",
-            "details": [
-                "Fix: Won deals with 0 roles distort benchmarks and ROI attribution.",
-                "How: CS/RevOps backfills using closed-won notes, emails, and meeting participants.",
-                "Next step: Add a close checklist blocking Won status if role count = 0."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "RevOps",
-            "priority": "High",
-            "condition": lambda: pct_0_open >= 0.12,
-            "title": "Prevent Stage Advancement When Coverage = 0",
-            "details": [
-                "Fix: Zero-contact opportunities strongly predict loss.",
-                "How: Add validation rules requiring ≥1 role beyond Early/Mid.",
-                "Next step: Pilot with one team, then scale org-wide after adoption proves stable."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Marketing Ops",
-            "priority": "Medium",
-            "condition": lambda: pct_1_or_less_open >= 0.20 and open_pipeline_risk > 0,
-            "title": "Trigger ABM Air-Cover on Under-Covered Accounts",
-            "details": [
-                "Fix: Missing evaluators/influencers slows decisions.",
-                "How: Run persona ads + intent outreach to surface new stakeholders.",
-                "Next step: Route engaged contacts into Salesforce and auto-associate to the active opp."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "RevOps",
-            "priority": "Medium",
-            "condition": lambda: pct_2plus_open_local < 0.55,
-            "title": "Add Contact-Coverage as a Forecast Risk Dimension",
-            "details": [
-                "Fix: Forecast rollups miss buying-group weakness early.",
-                "How: Flag deals with <2 roles as at-risk and show by stage + owner weekly.",
-                "Next step: Add this as a standard forecast call view."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Enablement",
-            "priority": "Medium",
-            "condition": lambda: lost_vs_won_contact_gap >= 1.5,
-            "title": "Coach to Close the Lost vs Won Buying-Group Gap",
-            "details": [
-                "Fix: Lost deals show a large stakeholder depth deficit.",
-                "How: Train reps to map decision process early and multi-thread objections by persona.",
-                "Next step: Run deal reviews focused on who’s missing and why."
-            ],
-        },
-        {
-            "is_rog_automation": False,
-            "tag": "Marketing",
-            "priority": "Low",
-            "condition": lambda: pct_2plus_open_local < 0.45,
-            "title": "Systematically Capture Missing Stakeholders via Programs",
-            "details": [
-                "Fix: Open deals aren’t broadening beyond initial contacts.",
-                "How: Use webinars, workshops, and gated assets to bring in evaluators.",
-                "Next step: Ensure forms collect persona and sync to CRM."
-            ],
-        },
-    ]
+        # 3) Zero-contact open deals
+        if pct_zero_open >= 0.10:
+            candidates.append((
+                "Eliminate 0-contact open opportunities",
+                "Open deals with zero stakeholders are high-risk and distort pipeline reporting. "
+                "Create an SLA: every new open opportunity must have at least one contact within 48 hours. "
+                "Next step: add a CRM validation rule or weekly exception report."
+            ))
 
-    relevant = []
-    for e in enhancements_library:
-        try:
-            if e["condition"]():
-                relevant.append(e)
-        except Exception:
-            continue
+        # 4) Won deals missing roles (CS-tagged)
+        if won_zero_count > 0:
+            candidates.append((
+                "Backfill Missing Roles on Won Deals (Customer Success)",
+                "Closed Won records without buying-group contacts undermine adoption analysis and renewal planning. "
+                "Customer Success should backfill key stakeholders (champion, economic buyer, admin) post-close. "
+                "Next step: CS Ops runs a monthly cleanup using the red-flag list."
+            ))
 
-    # Separate always-on automation
-    rog_auto = [e for e in relevant if e.get("is_rog_automation")]
-    others = [e for e in relevant if not e.get("is_rog_automation")]
+        # 5) Stage gate violations
+        # We'll compute after gates section is built; placeholder param via closure
+        def _stage_gate_rec():
+            nonlocal gate_roll
+            if gate_roll is None or gate_roll.empty:
+                return None
+            # identify weak buckets
+            weak = gate_roll[gate_roll["Opp Coverage %"] < 0.65]["Stage Bucket"].tolist()
+            if weak:
+                return (
+                    "Enforce stage-based coverage gates in pipeline inspection",
+                    "Coverage is below gate expectations in one or more stage buckets. "
+                    f"Add a pipeline-inspection rule to halt stage advancement until gates are met for: {', '.join(weak)}. "
+                    "Next step: enable gates in forecast calls and track improvement month over month."
+                )
+            return None
 
-    priority_rank = {"High": 0, "Medium": 1, "Low": 2}
-    others = sorted(others, key=lambda x: (priority_rank.get(x["priority"], 9), x["tag"]))
+        # 6) Very small closed sample warning
+        if (won_count + lost_count) < 30 and open_opps_total > 0:
+            candidates.append((
+                "Treat insights as directional and expand the analysis window",
+                "Closed-deal sample size is small, so trends may be noisy. "
+                "Re-export a longer time window (e.g., last 12–18 months) to stabilize win-rate vs coverage patterns. "
+                "Next step: rerun the app quarterly as more deals close."
+            ))
 
-    # LIMIT to 5 non-automation recommendations
-    others = others[:5]
+        # stage-gate rec if applicable
+        sg_rec = _stage_gate_rec()
+        if sg_rec:
+            candidates.append(sg_rec)
 
-    final_recos = rog_auto + others
+        # pick at most 5 (excluding automation)
+        selected = candidates[:5]
+        # return with automation first
+        return [(automation_head, automation_body)] + selected
 
-    # PDF blocks
-    relevant_enhancements_pdf = []
-    for e in final_recos:
-        block = f"[{e['priority']} — {e['tag']}] {e['title']}\n"
-        for d in e.get("details", []):
-            block += f"- {d}\n"
-        relevant_enhancements_pdf.append(block.strip())
+    # We'll build after Stage Gates are computed, so placeholder for now
+    recommendations = []
 
-    section_start("Recommended Enhancements")
-    st.caption(
-        "These are generated from your coverage patterns. Each one includes what to fix, how to fix it, and a next step."
-    )
-
-    if not final_recos:
-        st.markdown("<div class='body-text'>✅ Coverage looks healthy. Maintain current gates and coaching rhythm.</div>",
-                    unsafe_allow_html=True)
-    else:
-        for e in final_recos:
-            st.markdown(
-                f"<div class='reco-item body-text'>"
-                f"<div class='reco-title'>"
-                f"<span class='reco-chip'>{e['priority']}</span>"
-                f"<span class='reco-chip'>{e['tag']}</span>"
-                f"{html.escape(e['title'])}"
-                f"</div>"
-                + "".join([f"<div class='reco-detail'>• {html.escape(d)}</div>" for d in e.get("details", [])]) +
-                f"</div>",
-                unsafe_allow_html=True
-            )
-
-    section_end()
 
     # ======================================================
-    # Stage Coverage Gates
+    # Stage Coverage Gates (TABLE ONLY + COLORS + WON/LOST)
+     # Won gate = Late gate, Lost gate = Mid gate
     # ======================================================
     section_start("Stage Coverage Gates")
     st.caption(
@@ -1004,6 +865,7 @@ if opps_file and roles_file:
         gate_roll["Gate Value"] = gate_roll["Stage Bucket"].map(gate_map).fillna(0).astype(int)
 
         display_gate = gate_roll.rename(columns={
+            "Stage Bucket": "Stage Bucket",
             "Gate Value": "Gate (min contacts)",
             "Opps": "# Opps",
             "Opps_Meeting_Gate": "# Opps meeting gate",
@@ -1040,6 +902,18 @@ if opps_file and roles_file:
     else:
         st.info("No opportunities found for stage buckets in current mapping.")
 
+    section_end()
+
+    # Now that gates exist, build recommendations
+    recommendations = build_recommendations()
+
+    section_start("Recommended Enhancements")
+    st.caption("Actionable recommendations tailored to your data. Items shown below are the most relevant for your current coverage patterns.")
+    st.markdown("<div class='exec-summary'>", unsafe_allow_html=True)
+    for head, body in recommendations:
+        with st.expander(f"• {head}", expanded=False):
+            st.markdown(body)
+    st.markdown("</div>", unsafe_allow_html=True)
     section_end()
 
     # ======================================================
@@ -1106,202 +980,8 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # Simulator
-    # ======================================================
-    def modeled_win_rate_for_open(avg_open_contacts, base_win_rate, target_contacts):
-        cur = max(avg_open_contacts, 1e-6)
-        improvement_factor = min(1.8, target_contacts / cur)
-        return min(max(base_win_rate * improvement_factor, base_win_rate), 0.95)
-
-    section_start("Simulator — Target Contact Coverage")
-    st.caption(
-        "Model how improving buying-group coverage on open deals could change outcomes. "
-        "Pick a target average contact count and see modeled win rate uplift and incremental won pipeline."
-    )
-    target_contacts = st.slider("Target avg contacts on Open Opportunities", 0.0, 5.0, 2.0, 0.5)
-
-    enhanced_win_rate = modeled_win_rate_for_open(avg_cr_open, win_rate, target_contacts)
-    current_expected_wins = win_rate * open_pipeline
-    enhanced_expected_wins = enhanced_win_rate * open_pipeline
-    incremental_won_pipeline = max(0, enhanced_expected_wins - current_expected_wins)
-
-    st.markdown("**Status-quo outlook (if nothing changes):**")
-    label_with_tooltip("Expected Won Pipeline (Open) — Current", "Open pipeline × current win rate.")
-    show_value(fmt_money(current_expected_wins))
-
-    st.markdown("**Modeled Uplift (if Open coverage improves):**")
-    delta_contacts = target_contacts - avg_cr_open
-    pct_contacts = (delta_contacts / avg_cr_open) if avg_cr_open > 0 else 0
-    label_with_tooltip("Target Avg Contacts (Open)", "Selected target vs current avg on open deals.")
-    show_value(f"{target_contacts:.1f} vs Current {avg_cr_open:.1f} ({delta_contacts:+.1f}, {pct_contacts:+.0%})")
-
-    delta_wr_pp = (enhanced_win_rate - win_rate) * 100
-    pct_wr = ((enhanced_win_rate - win_rate) / win_rate) if win_rate > 0 else 0
-    label_with_tooltip("Enhanced Win Rate (modeled)", "Modeled win rate if open coverage hits target.")
-    show_value(f"{enhanced_win_rate:.1%} vs Current {win_rate:.1%} ({delta_wr_pp:+.1f} pp, {pct_wr:+.0%})")
-
-    pct_pipe = (incremental_won_pipeline / current_expected_wins) if current_expected_wins > 0 else 0
-    label_with_tooltip("Enhanced Expected Won Pipeline (Open)", "Expected won pipeline at modeled win rate.")
-    show_value(
-        f"{fmt_money(enhanced_expected_wins)} vs Current {fmt_money(current_expected_wins)} "
-        f"({fmt_money(incremental_won_pipeline)} uplift, {pct_pipe:+.0%})"
-    )
-    section_end()
-
-    # ======================================================
-    # Owner Coverage Rollup (Coaching View)
-    # ======================================================
-    section_start("Owner Coverage Rollup (Coaching View)")
-    st.caption(
-        "Reps are ranked by % of open deals missing buying-group contacts. "
-        "Expand any rep to see exactly which deals to fix."
-    )
-
-    owner_df = open_df.copy()
-    owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("").astype(str).str.strip()
-    owner_df = owner_df[owner_df["Opportunity Owner"] != ""].copy()
-
-    owner_df["is_undercovered"] = (owner_df["contact_count"] <= 1).astype(int)
-    owner_df["undercovered_amount"] = owner_df["Amount"].where(owner_df["contact_count"] <= 1, 0)
-
-    owner_roll = owner_df.groupby("Opportunity Owner", dropna=False).agg(
-        open_opps=("Opportunity ID", "nunique"),
-        opps_undercovered=("is_undercovered", "sum"),
-        open_pipeline=("Amount", "sum"),
-        undercovered_pipeline=("undercovered_amount", "sum")
-    ).reset_index()
-
-    owner_roll["pct_undercovered"] = owner_roll.apply(
-        lambda r: r["opps_undercovered"] / r["open_opps"] if r["open_opps"] > 0 else 0,
-        axis=1
-    )
-    owner_roll = owner_roll.sort_values("pct_undercovered", ascending=False)
-
-    stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
-    owner_df["Stage Bucket Rank"] = owner_df["Stage Bucket"].map(stage_priority_order).fillna(3)
-
-    owner_bullets_pdf = []
-    shown = 0
-    if owner_roll.empty:
-        st.markdown("<div class='body-text'>No open opportunities found for the selected filters.</div>",
-                    unsafe_allow_html=True)
-    else:
-        for _, r in owner_roll.iterrows():
-            open_opps_n = int(r["open_opps"])
-            if open_opps_n == 0:
-                continue
-
-            owner_name = r["Opportunity Owner"]
-            under_n = int(r["opps_undercovered"])
-            pct_under = float(r["pct_undercovered"])
-            open_pipe = float(r["open_pipeline"])
-            under_pipe = float(r["undercovered_pipeline"])
-
-            exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
-            owner_bullets_pdf.append(
-                f"{owner_name}: {pct_under:.0%} under-covered open opps ({under_n}/{open_opps_n}); "
-                f"pipeline at risk {fmt_money(under_pipe)} of {fmt_money(open_pipe)}."
-            )
-
-            with st.expander(exp_title, expanded=False):
-                st.text(f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline")
-
-                rep_under = owner_df[
-                    (owner_df["Opportunity Owner"] == owner_name) &
-                    (owner_df["contact_count"] <= 1)
-                ].copy()
-
-                if rep_under.empty:
-                    st.markdown("<div class='body-text'>✅ No under-covered open opportunities for this rep.</div>",
-                                unsafe_allow_html=True)
-                else:
-                    rep_under = rep_under.sort_values(
-                        ["Stage Bucket Rank", "Amount"],
-                        ascending=[True, False]
-                    )
-                    display_cols = [
-                        "Opportunity Name",
-                        "Account ID",
-                        "Stage",
-                        "Created Date",
-                        "Amount",
-                        "contact_count"
-                    ]
-                    rep_table = rep_under[display_cols].rename(columns={"contact_count": "# Contact Roles"})
-                    rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
-                    rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
-                    st.dataframe(rep_table, use_container_width=True, hide_index=True)
-
-                    st.caption(
-                        "Action: Add missing buying-group contacts on these deals. "
-                        "Prioritize Late-stage deals first to protect near-term pipeline."
-                    )
-
-            shown += 1
-            if shown >= 12:
-                break
-
-    section_end()
-
-    # ======================================================
-    # Top Open Opportunities to Fix First
-    # ======================================================
-    section_start("Top Open Opportunities to Fix First")
-    st.caption(
-        "Prioritize these open deals first. They are missing contacts and sorted from Late → Early stages "
-        "so the most urgent deals appear on top."
-    )
-
-    priority_df = open_df[open_df["contact_count"] <= 1].copy()
-    priority_df = priority_df[~priority_df["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
-
-    priority_df["Stage Bucket Rank"] = priority_df["Stage Bucket"].map(stage_priority_order).fillna(3)
-    priority_df = priority_df.sort_values(
-        ["Stage Bucket Rank", "Amount"],
-        ascending=[True, False]
-    ).head(15)
-
-    priority_bullets = []
-    for _, rr in priority_df.iterrows():
-        priority_bullets.append(
-            f"[{rr.get('Stage Bucket','Open')}] {rr.get('Opportunity Name','(No name)')} "
-            f"(ID {rr.get('Opportunity ID','')}) — Stage: {rr.get('Stage','')}, "
-            f"Owner: {rr.get('Opportunity Owner','')}, "
-            f"Contacts: {int(rr.get('contact_count',0))}, "
-            f"Amount: ${rr.get('Amount',0):,.0f}"
-        )
-
-    if priority_bullets:
-        render_body_bullets(priority_bullets)
-    else:
-        st.markdown("<div class='body-text'>• No under-covered open opportunities found (after excluding Qualified Out).</div>",
-                    unsafe_allow_html=True)
-
-    section_end()
-
-    # ======================================================
-    # Won Opps with 0 Contact Roles — red-flag bullets
-    # ======================================================
-    won_zero_bullets = []
-    if won_zero_count > 0:
-        section_start("Won Opps with 0 Contact Roles (Red Flag)")
-        st.caption(
-            "These won deals are missing buying-group contacts in the CRM. "
-            "Fixing this improves reporting accuracy and future forecasting."
-        )
-
-        for _, rr in won_zero_df.sort_values("Amount", ascending=False).head(20).iterrows():
-            won_zero_bullets.append(
-                f"{rr.get('Opportunity Name','(No name)')} (ID {rr.get('Opportunity ID','')}) — "
-                f"Owner: {rr.get('Opportunity Owner','')}, Stage: {rr.get('Stage','')}, "
-                f"Amount: ${rr.get('Amount',0):,.0f}"
-            )
-
-        render_body_bullets(won_zero_bullets)
-        section_end()
-
-    # ======================================================
     # INSIGHTS — CHARTS (same 5)
+    # Build these before Simulator so we can reuse winrate_bucket + CIs
     # ======================================================
     section_start("Insights")
     st.caption(
@@ -1467,7 +1147,298 @@ if opps_file and roles_file:
     section_end()
 
     # ======================================================
-    # PDF EXPORT
+    # Simulator — Target Contact Coverage (FULL BUNDLE)
+    # ======================================================
+    def as_bucket_for_model(n):
+        try:
+            n = float(n)
+        except Exception:
+            n = 0
+        if n <= 0:
+            return "1"
+        if n >= 7:
+            return "7+"
+        return str(int(round(n)))
+
+    # dicts from winrate_bucket
+    wr_map = dict(zip(winrate_bucket["Winrate Bucket"], winrate_bucket["Win Rate"]))
+    ci_low_map = dict(zip(winrate_bucket["Winrate Bucket"], winrate_bucket["CI Low"]))
+    ci_high_map = dict(zip(winrate_bucket["Winrate Bucket"], winrate_bucket["CI High"]))
+    n_map = dict(zip(winrate_bucket["Winrate Bucket"], winrate_bucket["n"]))
+
+    # stage weights
+    stage_weights = {"Late": 1.0, "Mid": 0.7, "Early": 0.4, "Open": 0.5}
+    open_df["stage_weight"] = open_df["Stage Bucket"].map(stage_weights).fillna(0.5)
+    open_df["weighted_amount"] = open_df["Amount"] * open_df["stage_weight"]
+
+    # current per-deal win rate (data-anchored)
+    open_df["model_bucket"] = open_df["contact_count"].apply(as_bucket_for_model)
+    open_df["bucket_wr"] = open_df["model_bucket"].map(wr_map).fillna(win_rate)
+    open_df["bucket_ci_low"] = open_df["model_bucket"].map(ci_low_map).fillna(win_rate)
+    open_df["bucket_ci_high"] = open_df["model_bucket"].map(ci_high_map).fillna(win_rate)
+
+    current_expected_weighted = (open_df["weighted_amount"] * open_df["bucket_wr"]).sum()
+    current_expected_low = (open_df["weighted_amount"] * open_df["bucket_ci_low"]).sum()
+    current_expected_high = (open_df["weighted_amount"] * open_df["bucket_ci_high"]).sum()
+
+    section_start("Simulator — Target Contact Coverage")
+    st.caption(
+        "This simulator uses **your historical closed-deal data** to estimate how buying-group depth changes outcomes. "
+        "It also weights Late/Mid stages more heavily because coverage matters most closer to close."
+    )
+
+    st.markdown("**A) Improve average coverage on all open deals**")
+    target_contacts = st.slider("Target avg contacts on Open Opportunities", 0.0, 7.0, 3.0, 0.5)
+    target_bucket = as_bucket_for_model(target_contacts)
+
+    # target bucket win rates
+    target_wr = wr_map.get(target_bucket, win_rate)
+    target_ci_low = ci_low_map.get(target_bucket, target_wr)
+    target_ci_high = ci_high_map.get(target_bucket, target_wr)
+
+    enhanced_expected_weighted = (open_df["weighted_amount"] * target_wr).sum()
+    enhanced_expected_low = (open_df["weighted_amount"] * target_ci_low).sum()
+    enhanced_expected_high = (open_df["weighted_amount"] * target_ci_high).sum()
+
+    inc_weighted = max(0, enhanced_expected_weighted - current_expected_weighted)
+    inc_low = max(0, enhanced_expected_low - current_expected_high)
+    inc_high = max(0, enhanced_expected_high - current_expected_low)
+
+    st.markdown("**Status-quo outlook (Option C: what happens if we do nothing?)**")
+    label_with_tooltip("Stage-weighted Expected Won Pipeline (Open) — Current",
+                       "Sum of (open Amount × stage weight × win rate for its current contact bucket).")
+    show_value(fmt_money(current_expected_weighted))
+
+    st.markdown("**Modeled uplift if average coverage improves to target**")
+    delta_contacts = target_contacts - avg_cr_open
+    pct_contacts = (delta_contacts / avg_cr_open) if avg_cr_open > 0 else 0
+    label_with_tooltip("Target Avg Contacts (Open)",
+                       "Selected target vs current average contacts on open deals.")
+    show_value(f"{target_contacts:.1f} vs Current {avg_cr_open:.1f} ({delta_contacts:+.1f}, {pct_contacts:+.0%})")
+
+    label_with_tooltip("Modeled Win Rate at Target (from your closed deals)",
+                       "Win rate observed historically for the selected contact bucket.")
+    show_value(f"{target_wr:.1%} (95% CI {target_ci_low:.1%}–{target_ci_high:.1%})")
+
+    pct_pipe = (inc_weighted / current_expected_weighted) if current_expected_weighted > 0 else 0
+    label_with_tooltip("Incremental Stage-weighted Won Pipeline (modeled)",
+                       "Difference between target and current expected won pipeline.")
+    show_value(
+        f"{fmt_money(inc_weighted)} uplift "
+        f"(range {fmt_money(inc_low)}–{fmt_money(inc_high)}, {pct_pipe:+.0%})"
+    )
+
+    # B) Fix top N deals
+    st.markdown("---")
+    st.markdown("**B) Fix the top under-covered open deals first (tactical plan)**")
+
+    stage_priority_order = {"Late": 0, "Mid": 1, "Early": 2, "Open": 3}
+    open_df["Stage Bucket Rank"] = open_df["Stage Bucket"].map(stage_priority_order).fillna(3)
+
+    priority_df = open_df[open_df["contact_count"] <= 1].copy()
+    priority_df = priority_df[~priority_df["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
+    priority_df = priority_df.sort_values(["Stage Bucket Rank", "Amount"], ascending=[True, False])
+
+    max_fix = min(25, len(priority_df))
+    fix_n = st.slider("How many top under-covered deals do we fix?", 0, max_fix, min(10, max_fix), 1)
+
+    to_fix = priority_df.head(fix_n).copy()
+    remaining = open_df.drop(index=to_fix.index).copy()
+
+    # expected if only these improve to target bucket
+    fix_expected_weighted = (to_fix["weighted_amount"] * target_wr).sum()
+    fix_expected_low = (to_fix["weighted_amount"] * target_ci_low).sum()
+    fix_expected_high = (to_fix["weighted_amount"] * target_ci_high).sum()
+
+    rem_expected_weighted = (remaining["weighted_amount"] * remaining["bucket_wr"]).sum()
+    rem_expected_low = (remaining["weighted_amount"] * remaining["bucket_ci_low"]).sum()
+    rem_expected_high = (remaining["weighted_amount"] * remaining["bucket_ci_high"]).sum()
+
+    tactical_expected = fix_expected_weighted + rem_expected_weighted
+    tactical_low = fix_expected_low + rem_expected_high
+    tactical_high = fix_expected_high + rem_expected_low
+
+    tactical_inc = max(0, tactical_expected - current_expected_weighted)
+    tactical_inc_low = max(0, tactical_low - current_expected_high)
+    tactical_inc_high = max(0, tactical_high - current_expected_low)
+
+    label_with_tooltip("Incremental Won Pipeline if we fix top deals",
+                       "Target bucket win rate applied only to top under-covered deals.")
+    show_value(f"{fmt_money(tactical_inc)} uplift (range {fmt_money(tactical_inc_low)}–{fmt_money(tactical_inc_high)})")
+
+    # Action to-dos
+    st.markdown("---")
+    st.markdown("**What needs to happen to hit the target?**")
+    required_new_contacts_total = max(0, (target_contacts - avg_cr_open)) * open_opps_total
+    required_new_contacts_total = int(round(required_new_contacts_total))
+
+    late_under = open_df[(open_df["Stage Bucket"] == "Late") & (open_df["contact_count"] <= 1)]["Opportunity ID"].nunique()
+    mid_under = open_df[(open_df["Stage Bucket"] == "Mid") & (open_df["contact_count"] <= 1)]["Opportunity ID"].nunique()
+
+    st.markdown(
+        f"""
+• To reach **{target_contacts:.1f} avg contacts**, you need roughly **{required_new_contacts_total:,} new stakeholders** added across open deals.  
+• Start with **Late/Mid stage** gaps (**Late under-covered: {late_under:,}**, **Mid under-covered: {mid_under:,}**).  
+• Use the “Top Open Opportunities to Fix First” list to execute weekly, then re-run the simulator to track uplift.
+        """
+    )
+
+    section_end()
+
+    # ======================================================
+    # Owner Coverage Rollup (Coaching View)
+    # ======================================================
+    section_start("Owner Coverage Rollup (Coaching View)")
+    st.caption(
+        "Reps are ranked by % of open deals missing buying-group contacts. "
+        "Expand any rep to see exactly which deals to fix."
+    )
+
+    owner_df = open_df.copy()
+    owner_df["Opportunity Owner"] = owner_df["Opportunity Owner"].fillna("").astype(str).str.strip()
+    owner_df = owner_df[owner_df["Opportunity Owner"] != ""].copy()
+
+    owner_df["is_undercovered"] = (owner_df["contact_count"] <= 1).astype(int)
+    owner_df["undercovered_amount"] = owner_df["Amount"].where(owner_df["contact_count"] <= 1, 0)
+
+    owner_roll = owner_df.groupby("Opportunity Owner", dropna=False).agg(
+        open_opps=("Opportunity ID", "nunique"),
+        opps_undercovered=("is_undercovered", "sum"),
+        open_pipeline=("Amount", "sum"),
+        undercovered_pipeline=("undercovered_amount", "sum")
+    ).reset_index()
+
+    owner_roll["pct_undercovered"] = owner_roll.apply(
+        lambda r: r["opps_undercovered"] / r["open_opps"] if r["open_opps"] > 0 else 0,
+        axis=1
+    )
+    owner_roll = owner_roll.sort_values("pct_undercovered", ascending=False)
+
+    owner_bullets_pdf = []
+    shown = 0
+    if owner_roll.empty:
+        st.markdown("No open opportunities found for the selected filters.")
+    else:
+        for _, r in owner_roll.iterrows():
+            open_opps_n = int(r["open_opps"])
+            if open_opps_n == 0:
+                continue
+
+            owner_name = r["Opportunity Owner"]
+            under_n = int(r["opps_undercovered"])
+            pct_under = float(r["pct_undercovered"])
+            open_pipe = float(r["open_pipeline"])
+            under_pipe = float(r["undercovered_pipeline"])
+
+            exp_title = f"{owner_name} — {pct_under:.0%} open opps under-covered ({under_n}/{open_opps_n})"
+            owner_bullets_pdf.append(
+                f"{owner_name}: {pct_under:.0%} under-covered open opps ({under_n}/{open_opps_n}); "
+                f"pipeline at risk {fmt_money(under_pipe)} of {fmt_money(open_pipe)}."
+            )
+
+            with st.expander(exp_title, expanded=False):
+                st.text(
+                    f"Pipeline at risk: {fmt_money(under_pipe)} / {fmt_money(open_pipe)} open pipeline"
+                )
+
+                rep_under = owner_df[
+                    (owner_df["Opportunity Owner"] == owner_name) &
+                    (owner_df["contact_count"] <= 1)
+                ].copy()
+
+                if rep_under.empty:
+                    st.write("✅ No under-covered open opportunities for this rep.")
+                else:
+                    rep_under = rep_under.sort_values(
+                        ["Stage Bucket Rank", "Amount"],
+                        ascending=[True, False]
+                    )
+                    display_cols = [
+                        "Opportunity Name",
+                        "Account ID",
+                        "Stage",
+                        "Created Date",
+                        "Amount",
+                        "contact_count"
+                    ]
+                    rep_table = rep_under[display_cols].rename(columns={
+                        "contact_count": "# Contact Roles"
+                    })
+                    rep_table["Created Date"] = rep_table["Created Date"].dt.strftime("%Y-%m-%d")
+                    rep_table["Amount"] = rep_table["Amount"].map(lambda x: f"${x:,.0f}")
+                    st.dataframe(rep_table, use_container_width=True, hide_index=True)
+
+                    st.caption(
+                        "Action: Add missing buying-group contacts on these deals. "
+                        "Prioritize Late-stage deals first to protect near-term pipeline."
+                    )
+
+            shown += 1
+            if shown >= 12:
+                break
+
+    section_end()
+
+    # ======================================================
+    # Top Open Opportunities to Fix First
+    # ======================================================
+    section_start("Top Open Opportunities to Fix First")
+    st.caption(
+        "Prioritize these open deals first. They are missing contacts and sorted from Late → Early stages "
+        "so the most urgent deals appear on top."
+    )
+
+    priority_df2 = open_df[open_df["contact_count"] <= 1].copy()
+    priority_df2 = priority_df2[~priority_df2["Stage"].str.contains("Qualified Out", case=False, na=False)].copy()
+    priority_df2["Stage Bucket Rank"] = priority_df2["Stage Bucket"].map(stage_priority_order).fillna(3)
+    priority_df2 = priority_df2.sort_values(
+        ["Stage Bucket Rank", "Amount"],
+        ascending=[True, False]
+    ).head(15)
+
+    priority_bullets = []
+    for _, rr in priority_df2.iterrows():
+        priority_bullets.append(
+            f"[{rr.get('Stage Bucket','Open')}] {rr.get('Opportunity Name','(No name)')} "
+            f"(ID {rr.get('Opportunity ID','')}) — Stage: {rr.get('Stage','')}, "
+            f"Owner: {rr.get('Opportunity Owner','')}, "
+            f"Contacts: {int(rr.get('contact_count',0))}, "
+            f"Amount: ${rr.get('Amount',0):,.0f}"
+        )
+
+    if priority_bullets:
+        for b in priority_bullets:
+            st.markdown(f"• {b}")
+    else:
+        st.markdown("• No under-covered open opportunities found (after excluding Qualified Out).")
+
+    section_end()
+
+    # ======================================================
+    # Won Opps with 0 Contact Roles — red-flag bullets
+    # ======================================================
+    won_zero_bullets = []
+    if won_zero_count > 0:
+        section_start("Won Opps with 0 Contact Roles (Red Flag)")
+        st.caption(
+            "These won deals are missing buying-group contacts in the CRM. "
+            "Fixing this improves reporting accuracy and future forecasting."
+        )
+
+        for _, rr in won_zero_df.sort_values("Amount", ascending=False).head(20).iterrows():
+            won_zero_bullets.append(
+                f"{rr.get('Opportunity Name','(No name)')} (ID {rr.get('Opportunity ID','')}) — "
+                f"Owner: {rr.get('Opportunity Owner','')}, Stage: {rr.get('Stage','')}, "
+                f"Amount: ${rr.get('Amount',0):,.0f}"
+            )
+
+        for b in won_zero_bullets:
+            st.markdown(f"• {b}")
+
+        section_end()
+
+    # ======================================================
+    # PDF EXPORT (includes Stage Gates + Recommendations + Simulator)
     # ======================================================
     st.markdown("---")
     section_start("Download Full PDF Report")
@@ -1495,9 +1466,11 @@ if opps_file and roles_file:
             ["% of Open Opps Missing Contacts", f"{risk_pct:.1%} ({open_opps_risk:,} of {open_opps_total:,})"],
         ],
         "Simulator — Target Contact Coverage": [
-            ["Target Avg Contacts (Open)", f"{target_contacts:.1f}"],
-            ["Enhanced Win Rate (modeled)", f"{enhanced_win_rate:.1%}"],
-            ["Incremental Won Pipeline (modeled)", fmt_money(incremental_won_pipeline)],
+            ["Target Avg Contacts (Open)", f"{target_contacts:.1f} (bucket {target_bucket})"],
+            ["Modeled Win Rate at Target", f"{target_wr:.1%} (CI {target_ci_low:.1%}–{target_ci_high:.1%})"],
+            ["Current Stage-weighted Expected Won Pipeline", fmt_money(current_expected_weighted)],
+            ["Incremental Stage-weighted Won Pipeline", f"{fmt_money(inc_weighted)} (range {fmt_money(inc_low)}–{fmt_money(inc_high)})"],
+            ["Incremental if Fix Top N Deals", f"N={fix_n}: {fmt_money(tactical_inc)} (range {fmt_money(tactical_inc_low)}–{fmt_money(tactical_inc_high)})"],
         ],
     }
 
@@ -1522,6 +1495,7 @@ if opps_file and roles_file:
             ])
         metrics_dict["Stage Coverage Gates"] = gate_rows_pdf
 
+    # Build matplotlib charts for PDF
     chart_pngs = []
 
     fig1, ax1 = plt.subplots(figsize=(7, 3.2))
@@ -1566,7 +1540,7 @@ if opps_file and roles_file:
     pdf_bytes = build_pdf_report(
         metrics_dict=metrics_dict,
         bullets=[re.sub(r"\*\*(.*?)\*\*", r"\1", b) for b in bullets],
-        recommended_enhancements=relevant_enhancements_pdf,
+        enhancements=recommendations,
         chart_pngs=chart_pngs,
         won_zero_rows=won_zero_bullets,
         owner_bullets=owner_bullets_pdf,
@@ -1579,6 +1553,7 @@ if opps_file and roles_file:
         file_name="RevOps_Global_CRM_ContactRole_Insights.pdf",
         mime="application/pdf"
     )
+
     section_end()
 
 else:
